@@ -73,10 +73,14 @@ final class CaptureManager {
                 config.showsCursor = false
 
                 let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-                let size = NSSize(width: cgImage.width, height: cgImage.height)
-                let image = NSImage(cgImage: cgImage, size: size)
-
-                await MainActor.run { completion(image) }
+                // NSImage 非 Sendable，在 MainActor 内构造避免跨 actor 边界传递
+                await MainActor.run {
+                    let image = NSImage(
+                        cgImage: cgImage,
+                        size: NSSize(width: cgImage.width, height: cgImage.height)
+                    )
+                    completion(image)
+                }
             } catch {
                 NSLog("[CaptureManager] 截图失败: \(error.localizedDescription)")
                 await MainActor.run { completion(nil) }
