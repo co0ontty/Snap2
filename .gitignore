@@ -1,0 +1,29 @@
+# macOS
+.DS_Store
+*.swp
+
+# Build outputs
+.build/
+build_output/
+build_tmp/
+*.app/
+*.dmg
+*.icns
+*.iconset/
+
+# Xcode
+*.xcodeproj/
+*.xcworkspace/
+xcuserdata/
+DerivedData/
+*.xcuserstate
+
+# Swift Package Manager
+Package.resolved
+.swiftpm/
+
+# IDE
+.vscode/
+.idea/
+.cursor/
+.claude/
