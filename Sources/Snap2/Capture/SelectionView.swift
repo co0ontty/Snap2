@@ -596,29 +596,12 @@ final class SelectionView: NSView {
     }
 
     private func positionToolbar(_ panel: GlassPanel) {
-        guard let pw = window else { return }
-        let so = pw.frame.origin
-        let gap: CGFloat = 12
-        let pw_height = panel.frame.height
-        let pw_width = panel.frame.width
-
-        // 默认置于选区上方居中
-        var x = so.x + selectionRect.midX - pw_width / 2
-        var y = so.y + selectionRect.maxY + gap
-
-        // 边界保护
-        let screenFrame = pw.screen?.frame ?? pw.frame
-        let minX = so.x + 8
-        let maxX = so.x + screenFrame.width - pw_width - 8
-        if x < minX { x = minX }
-        if x > maxX { x = maxX }
-
-        // 上方放不下退到下方
-        if y + pw_height > so.y + screenFrame.height - 8 {
-            y = so.y + selectionRect.minY - pw_height - gap
-            if y < so.y + 8 { y = so.y + 8 }
-        }
-
+        guard let screen = window?.screen ?? NSScreen.main else { return }
+        // 贴屏幕底部居中（visibleFrame 已避开 dock）
+        let visible = screen.visibleFrame
+        let bottomGap: CGFloat = 8
+        let x = visible.minX + (visible.width - panel.frame.width) / 2
+        let y = visible.minY + bottomGap
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
