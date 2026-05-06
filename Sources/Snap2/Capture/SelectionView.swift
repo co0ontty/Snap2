@@ -20,6 +20,8 @@ final class SelectionView: NSView {
 
     // 标注
     private var capturedImage: NSImage?
+    /// 截图触发瞬间冻结的整屏画面；选区背景从这里取，避免动态内容被划过去
+    private var frozenImage: NSImage?
     private var elements: [AnnotationElement] = []
     private var currentElement: AnnotationElement?
     private var undoStack: [[AnnotationElement]] = []
@@ -57,19 +59,33 @@ final class SelectionView: NSView {
         super.draw(dirtyRect)
         guard let context = NSGraphicsContext.current?.cgContext else { return }
 
-        // 1. 全屏遮罩（深色）
+        // 1. 背景：有冻结画面就铺，没有则保持透明（让活的桌面透出来作降级方案）
+        frozenImage?.draw(in: bounds)
+
+        let hasSelection = selectionRect.width > 0 && selectionRect.height > 0
+
+        // 2. 暗色蒙版
         context.saveGState()
         DrawingDefaults.overlayColor.setFill()
-        context.fill(bounds)
+        if hasSelection {
+            if frozenImage != nil {
+                // 选区外用 even-odd 一笔覆盖，选区内保持冻结画面原色
+                let mask = NSBezierPath(rect: bounds)
+                mask.append(NSBezierPath(rect: selectionRect))
+                mask.windingRule = .evenOdd
+                mask.fill()
+            } else {
+                // 旧路径：先全屏蒙暗，再 clear 选区让活桌面透出
+                context.fill(bounds)
+                context.setBlendMode(.clear)
+                context.fill(selectionRect)
+            }
+        } else {
+            context.fill(bounds)
+        }
         context.restoreGState()
 
-        guard selectionRect.width > 0, selectionRect.height > 0 else { return }
-
-        // 2. 选区清透
-        context.saveGState()
-        context.setBlendMode(.clear)
-        context.fill(selectionRect)
-        context.restoreGState()
+        guard hasSelection else { return }
 
         switch mode {
         case .selecting:
@@ -81,6 +97,12 @@ final class SelectionView: NSView {
             drawAnnotations(in: context)
             drawAnnotationFrame(in: context)
         }
+    }
+
+    /// 由 CaptureManager 在异步冻结完成后调用
+    func setFrozenImage(_ image: NSImage) {
+        frozenImage = image
+        needsDisplay = true
     }
 
     private func drawSelectionChrome(in context: CGContext) {
@@ -346,6 +368,21 @@ final class SelectionView: NSView {
 
     private func enterAnnotationMode(then completion: (() -> Void)? = nil) {
         guard let screen = window?.screen else { return }
+        hideSizeBadge()
+
+        // 优先从冻结画面裁剪——和用户实际看到的选区一致，且无需再调一次 SCK
+        if let frozen = frozenImage,
+           let cropped = cropFrozenImage(frozen, to: selectionRect) {
+            self.capturedImage = cropped
+            self.mode = .annotating
+            self.showAnnotationToolbar()
+            self.needsDisplay = true
+            self.window?.invalidateCursorRects(for: self)
+            completion?()
+            return
+        }
+
+        // 降级：冻结尚未到达（用户飞快框完）或失败时重新走 SCK
         let screenFrame = screen.frame
         let captureRect = NSRect(
             x: screenFrame.origin.x + selectionRect.origin.x,
@@ -353,9 +390,6 @@ final class SelectionView: NSView {
             width: selectionRect.width,
             height: selectionRect.height
         )
-
-        hideSizeBadge()
-
         CaptureManager.shared.captureInline(rect: captureRect, screen: screen) { [weak self] image in
             guard let self = self else { return }
             guard let image = image else {
@@ -369,6 +403,29 @@ final class SelectionView: NSView {
             self.window?.invalidateCursorRects(for: self)
             completion?()
         }
+    }
+
+    /// 把冻结的整屏画面按选区（视图坐标，y 朝上）裁出 NSImage。
+    /// CGImage 走的是顶向下坐标系，需要做 Y 翻转换算。
+    private func cropFrozenImage(_ image: NSImage, to rect: NSRect) -> NSImage? {
+        guard let firstRep = image.representations.first as? NSBitmapImageRep,
+              let cgImage = firstRep.cgImage else { return nil }
+
+        let pixelW = CGFloat(cgImage.width)
+        let pixelH = CGFloat(cgImage.height)
+        guard image.size.width > 0, image.size.height > 0 else { return nil }
+        let scaleX = pixelW / image.size.width
+        let scaleY = pixelH / image.size.height
+
+        let cropRect = CGRect(
+            x: rect.origin.x * scaleX,
+            y: pixelH - (rect.origin.y + rect.height) * scaleY,
+            width: rect.width * scaleX,
+            height: rect.height * scaleY
+        ).integral
+
+        guard let cropped = cgImage.cropping(to: cropRect) else { return nil }
+        return NSImage(cgImage: cropped, size: rect.size)
     }
 
     // MARK: - 标注鼠标
@@ -600,17 +657,44 @@ final class SelectionView: NSView {
 
     private func renderFinalImage() -> NSImage {
         guard let bg = capturedImage else { return NSImage() }
-        let size = bg.size
-        let img = NSImage(size: size)
-        img.lockFocus()
-        bg.draw(in: NSRect(origin: .zero, size: size))
+
+        // 逻辑尺寸来自 NSImage.size（点），像素尺寸来自原始 rep——
+        // 不能用 lockFocus，它会创建 72dpi 1× 缓冲，导致保存出来的图变成低分辨率。
+        let pointSize = bg.size
+        let pixelW: Int
+        let pixelH: Int
+        if let rep = bg.representations.first {
+            pixelW = rep.pixelsWide
+            pixelH = rep.pixelsHigh
+        } else {
+            pixelW = Int(round(pointSize.width))
+            pixelH = Int(round(pointSize.height))
+        }
+
+        guard let outRep = NSBitmapImageRep(
+            bitmapDataPlanes: nil,
+            pixelsWide: pixelW, pixelsHigh: pixelH,
+            bitsPerSample: 8, samplesPerPixel: 4,
+            hasAlpha: true, isPlanar: false,
+            colorSpaceName: .deviceRGB,
+            bytesPerRow: 0, bitsPerPixel: 32
+        ) else { return NSImage() }
+        outRep.size = pointSize  // 让 rep 在逻辑空间是 pointSize
+
+        NSGraphicsContext.saveGraphicsState()
+        defer { NSGraphicsContext.restoreGraphicsState() }
+        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: outRep)
+
+        bg.draw(in: NSRect(origin: .zero, size: pointSize))
         if let ctx = NSGraphicsContext.current?.cgContext {
             for el in elements {
                 toolRegistry.tool(for: el.toolType)?.draw(element: el, in: ctx)
             }
         }
-        img.unlockFocus()
-        return img
+
+        let result = NSImage(size: pointSize)
+        result.addRepresentation(outRep)
+        return result
     }
 
     private func timestamp() -> String {

@@ -4,11 +4,15 @@ import AppKit
 /// 每个屏幕上创建一个，用于捕获用户的鼠标选区操作
 class OverlayWindow: NSWindow {
 
+    /// 关联的屏幕（用于异步冻结画面后定位）
+    let targetScreen: NSScreen
+
     // MARK: - 初始化
 
     /// 在指定屏幕上创建全屏覆盖窗口
     /// - Parameter screen: 要覆盖的屏幕
     init(screen: NSScreen) {
+        self.targetScreen = screen
         super.init(
             contentRect: screen.frame,
             styleMask: .borderless,
