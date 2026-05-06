@@ -12,6 +12,10 @@ final class PinnedImageWindow: NSPanel {
     private let imageView = DraggableImageView()
     private let closeButton = NSButton()
     private var trackingArea: NSTrackingArea?
+    private var hoverToolbar: PinHoverToolbar?
+
+    /// 当前钉图所显示的图片，给"重新标注"流程用
+    var currentImage: NSImage { imageView.image ?? NSImage() }
 
     /// 在屏幕坐标 origin 处弹出钉图。
     @discardableResult
@@ -94,6 +98,8 @@ final class PinnedImageWindow: NSPanel {
         closeButton.autoresizingMask = [.minXMargin, .minYMargin]
         host.addSubview(closeButton)
 
+        hoverToolbar = PinHoverToolbar(owner: self)
+
         installTrackingArea(on: host)
     }
 
@@ -113,6 +119,7 @@ final class PinnedImageWindow: NSPanel {
     }
 
     override func mouseEntered(with event: NSEvent) {
+        hoverToolbar?.pinMouseEntered()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.15
             closeButton.animator().alphaValue = 1.0
@@ -120,6 +127,7 @@ final class PinnedImageWindow: NSPanel {
     }
 
     override func mouseExited(with event: NSEvent) {
+        hoverToolbar?.pinMouseExited()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.20
             closeButton.animator().alphaValue = 0.0
@@ -134,13 +142,28 @@ final class PinnedImageWindow: NSPanel {
         }
     }
 
+    func editFromHoverToolbar() {
+        // 异步派发：CaptureManager 会 orderOut 自身，避免在 mouseDown loop 内拆窗
+        hoverToolbar?.hideImmediately()
+        DispatchQueue.main.async { [weak self] in
+            guard let self = self else { return }
+            CaptureManager.shared.editPin(self)
+        }
+    }
+
+    func closeFromHoverToolbar() {
+        closeTapped()
+    }
+
     private func dismissAnimated() {
         NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.18
             ctx.timingFunction = CAMediaTimingFunction(name: .easeIn)
             self.animator().alphaValue = 0
+            self.hoverToolbar?.hideImmediately()
         }, completionHandler: { [weak self] in
             guard let self = self else { return }
+            self.hoverToolbar?.detach()
             self.orderOut(nil)
             PinnedImageWindow.allPins.removeAll { $0 === self }
         })

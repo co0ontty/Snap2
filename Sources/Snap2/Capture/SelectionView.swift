@@ -37,9 +37,6 @@ final class SelectionView: NSView {
     private var toolbarView: GlassToolbar?
     private var sizeBadgePanel: GlassPanel?
     private var sizeBadgeLabel: NSTextField?
-    private var toolbarFadeTimer: Timer?
-    /// 收起态透明度（仍可看见以便用户找到）
-    private let toolbarDimAlpha: CGFloat = 0.28
 
     // 内嵌文字编辑
     private weak var activeTextField: InlineAnnotationTextField?
@@ -53,6 +50,8 @@ final class SelectionView: NSView {
     private var pinDragHandOffset: NSPoint = .zero
     private let pinHandleSize: CGFloat = 28
     private let pinHandleInset: CGFloat = 6
+    /// 鼠标是否悬停在拖动手柄上：决定手柄绘制透明度
+    private var isPinHandleHovered: Bool = false
 
     // MARK: - 视图设置
 
@@ -119,6 +118,17 @@ final class SelectionView: NSView {
         needsDisplay = true
     }
 
+    /// 钉图"重新标注"入口：直接进入 annotating，跳过选区阶段。
+    /// 调用方负责把钉图屏幕坐标换算为本视图局部坐标。
+    func startPinEdit(image: NSImage, selectionInView rect: NSRect) {
+        capturedImage = image
+        selectionRect = rect
+        mode = .annotating
+        showAnnotationToolbar()
+        needsDisplay = true
+        window?.invalidateCursorRects(for: self)
+    }
+
     private func drawSelectionChrome(in context: CGContext) {
         // 选区边框：1px 内白 + 极轻外发光
         context.saveGState()
@@ -171,6 +181,8 @@ final class SelectionView: NSView {
     private func drawPinHandle(in context: CGContext) {
         guard let r = pinHandleRect() else { return }
         context.saveGState()
+        // 默认半透明，悬停时拉满，避免常态下喧宾夺主
+        context.setAlpha(isPinHandleHovered ? 1.0 : 0.35)
 
         // 圆角暗色背景
         let bg = CGPath(roundedRect: r, cornerWidth: 6, cornerHeight: 6, transform: nil)
@@ -319,6 +331,17 @@ final class SelectionView: NSView {
         updateSizeBadge()
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
+    }
+
+    override func mouseMoved(with event: NSEvent) {
+        super.mouseMoved(with: event)
+        guard mode == .annotating else { return }
+        let p = convert(event.locationInWindow, from: nil)
+        let nowHover = pinHandleRect()?.contains(p) ?? false
+        if nowHover != isPinHandleHovered {
+            isPinHandleHovered = nowHover
+            needsDisplay = true
+        }
     }
 
     override func mouseUp(with event: NSEvent) {
@@ -482,23 +505,33 @@ final class SelectionView: NSView {
     /// 把冻结的整屏画面按选区（视图坐标，y 朝上）裁出 NSImage。
     /// CGImage 走的是顶向下坐标系，需要做 Y 翻转换算。
     private func cropFrozenImage(_ image: NSImage, to rect: NSRect) -> NSImage? {
-        guard let firstRep = image.representations.first as? NSBitmapImageRep,
-              let cgImage = firstRep.cgImage else { return nil }
+        var proposed = NSRect(origin: .zero, size: image.size)
+        guard let cgImage = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else {
+            return nil
+        }
 
         let pixelW = CGFloat(cgImage.width)
         let pixelH = CGFloat(cgImage.height)
-        guard image.size.width > 0, image.size.height > 0 else { return nil }
+        guard image.size.width > 0, image.size.height > 0,
+              rect.width > 0, rect.height > 0 else { return nil }
         let scaleX = pixelW / image.size.width
         let scaleY = pixelH / image.size.height
 
-        let cropRect = CGRect(
-            x: rect.origin.x * scaleX,
-            y: pixelH - (rect.origin.y + rect.height) * scaleY,
+        // CGImage 使用左上为原点的像素坐标；SelectionView 使用左下为原点的点坐标。
+        let raw = CGRect(
+            x: rect.minX * scaleX,
+            y: pixelH - rect.maxY * scaleY,
             width: rect.width * scaleX,
             height: rect.height * scaleY
-        ).integral
+        )
+        let minX = max(0, floor(raw.minX))
+        let minY = max(0, floor(raw.minY))
+        let maxX = min(pixelW, ceil(raw.maxX))
+        let maxY = min(pixelH, ceil(raw.maxY))
+        let cropRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
 
-        guard let cropped = cgImage.cropping(to: cropRect) else { return nil }
+        guard cropRect.width > 0, cropRect.height > 0,
+              let cropped = cgImage.cropping(to: cropRect) else { return nil }
         return NSImage(cgImage: cropped, size: rect.size)
     }
 
@@ -754,20 +787,36 @@ final class SelectionView: NSView {
     private func copyImageToClipboard(_ image: NSImage) {
         let pb = NSPasteboard.general
         pb.clearContents()
-        if let tiff = image.tiffRepresentation {
-            pb.setData(tiff, forType: .tiff)
-            if let rep = NSBitmapImageRep(data: tiff),
-               let png = rep.representation(using: .png, properties: [:]) {
+
+        if let rep = image.representations.first as? NSBitmapImageRep {
+            if let tiff = rep.tiffRepresentation {
+                pb.setData(tiff, forType: .tiff)
+            }
+            if let png = rep.representation(using: .png, properties: [:]) {
                 pb.setData(png, forType: .png)
             }
+            return
+        }
+
+        if let tiff = image.tiffRepresentation {
+            pb.setData(tiff, forType: .tiff)
         }
     }
 
     /// 按设置编码：返回 (数据, 扩展名)
     private func encode(_ image: NSImage) -> (Data, String) {
-        guard let tiff = image.tiffRepresentation,
-              let rep = NSBitmapImageRep(data: tiff)
-        else { return (Data(), "png") }
+        let rep: NSBitmapImageRep?
+        if let bitmap = image.representations.first as? NSBitmapImageRep {
+            rep = bitmap
+        } else {
+            var proposed = NSRect(origin: .zero, size: image.size)
+            rep = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil).map { cgImage in
+                let bitmap = NSBitmapImageRep(cgImage: cgImage)
+                bitmap.size = image.size
+                return bitmap
+            }
+        }
+        guard let rep else { return (Data(), "png") }
 
         let format = UserDefaults.standard.string(forKey: UDKey.imageFormat) ?? "png"
         if format == "jpeg" {
@@ -787,18 +836,26 @@ final class SelectionView: NSView {
     private func renderFinalImage() -> NSImage {
         guard let bg = capturedImage else { return NSImage() }
 
-        // 逻辑尺寸来自 NSImage.size（点），像素尺寸来自原始 rep——
-        // 不能用 lockFocus，它会创建 72dpi 1× 缓冲，导致保存出来的图变成低分辨率。
+        // 逻辑尺寸来自 NSImage.size（点），像素尺寸来自原始 CGImage / rep。
+        // 最终结果始终保留 backing scale：例如 200pt @2x 输出 400px。
         let pointSize = bg.size
+        guard pointSize.width > 0, pointSize.height > 0 else { return NSImage() }
+
+        var proposed = NSRect(origin: .zero, size: pointSize)
+        let bgCG = bg.cgImage(forProposedRect: &proposed, context: nil, hints: nil)
         let pixelW: Int
         let pixelH: Int
-        if let rep = bg.representations.first {
+        if let cg = bgCG {
+            pixelW = cg.width
+            pixelH = cg.height
+        } else if let rep = bg.representations.first {
             pixelW = rep.pixelsWide
             pixelH = rep.pixelsHigh
         } else {
             pixelW = Int(round(pointSize.width))
             pixelH = Int(round(pointSize.height))
         }
+        guard pixelW > 0, pixelH > 0 else { return NSImage() }
 
         guard let outRep = NSBitmapImageRep(
             bitmapDataPlanes: nil,
@@ -808,17 +865,28 @@ final class SelectionView: NSView {
             colorSpaceName: .deviceRGB,
             bytesPerRow: 0, bitsPerPixel: 32
         ) else { return NSImage() }
-        outRep.size = pointSize  // 让 rep 在逻辑空间是 pointSize
+        outRep.size = pointSize
 
         NSGraphicsContext.saveGraphicsState()
         defer { NSGraphicsContext.restoreGraphicsState() }
-        NSGraphicsContext.current = NSGraphicsContext(bitmapImageRep: outRep)
+        guard let graphicsContext = NSGraphicsContext(bitmapImageRep: outRep) else { return NSImage() }
+        NSGraphicsContext.current = graphicsContext
+        graphicsContext.cgContext.interpolationQuality = .none
 
-        bg.draw(in: NSRect(origin: .zero, size: pointSize))
-        if let ctx = NSGraphicsContext.current?.cgContext {
-            for el in elements {
-                toolRegistry.tool(for: el.toolType)?.draw(element: el, in: ctx)
-            }
+        if let cg = bgCG {
+            let bgRep = NSBitmapImageRep(cgImage: cg)
+            bgRep.size = pointSize
+            bgRep.draw(in: NSRect(origin: .zero, size: pointSize))
+        } else {
+            bg.draw(in: NSRect(origin: .zero, size: pointSize),
+                    from: .zero,
+                    operation: .sourceOver,
+                    fraction: 1.0,
+                    respectFlipped: false,
+                    hints: [.interpolation: NSImageInterpolation.none])
+        }
+        for el in elements {
+            toolRegistry.tool(for: el.toolType)?.draw(element: el, in: graphicsContext.cgContext)
         }
 
         let result = NSImage(size: pointSize)
@@ -851,7 +919,7 @@ final class SelectionView: NSView {
         panel.contentBox.addSubview(toolbar)
         NSLayoutConstraint.activate([
             toolbar.topAnchor.constraint(equalTo: panel.contentBox.topAnchor),
-            toolbar.bottomAnchor.constraint(equalTo: panel.contentBox.bottomAnchor),
+            toolbar.heightAnchor.constraint(equalToConstant: height),
             toolbar.leadingAnchor.constraint(equalTo: panel.contentBox.leadingAnchor),
             toolbar.trailingAnchor.constraint(equalTo: panel.contentBox.trailingAnchor),
         ])
@@ -868,44 +936,11 @@ final class SelectionView: NSView {
         toolbarPanel = panel
         toolbarView = toolbar
 
-        // hover 折叠：鼠标进入工具栏 → 全亮；离开 → 渐隐到半透明（仍可见）
-        toolbar.onHoverEnter = { [weak self] in
-            self?.cancelToolbarFade()
-            self?.fadeToolbar(to: 1.0, duration: 0.15)
-        }
-        toolbar.onHoverExit = { [weak self] in
-            self?.scheduleToolbarFade()
-        }
-
-        NSAnimationContext.runAnimationGroup({ ctx in
+        NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.22
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1.0
             panel.animator().setFrameOrigin(target)
-        }, completionHandler: { [weak self] in
-            // 入场后若鼠标不在工具栏内，1.5s 后自动收起
-            self?.scheduleToolbarFade()
-        })
-    }
-
-    private func scheduleToolbarFade() {
-        cancelToolbarFade()
-        toolbarFadeTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
-            self?.fadeToolbar(to: self?.toolbarDimAlpha ?? 0.28, duration: 0.30)
-        }
-    }
-
-    private func cancelToolbarFade() {
-        toolbarFadeTimer?.invalidate()
-        toolbarFadeTimer = nil
-    }
-
-    private func fadeToolbar(to alpha: CGFloat, duration: TimeInterval) {
-        guard let panel = toolbarPanel else { return }
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = duration
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = alpha
         }
     }
 
@@ -944,7 +979,6 @@ final class SelectionView: NSView {
     }
 
     private func removeToolbar() {
-        cancelToolbarFade()
         if let panel = toolbarPanel {
             panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)

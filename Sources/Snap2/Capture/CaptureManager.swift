@@ -10,6 +10,8 @@ final class CaptureManager {
 
     private var overlayWindows: [OverlayWindow] = []
     private(set) var isCapturing = false
+    /// 当前被"重新标注"的钉图——会在编辑期间隐藏，结束后再 orderFront 回来
+    private var pinBeingEdited: PinnedImageWindow?
 
     // MARK: - 开始截图
 
@@ -75,6 +77,46 @@ final class CaptureManager {
 
     func cancelCapture() {
         closeAllOverlays()
+    }
+
+    // MARK: - 钉图重新标注
+
+    /// 把钉图作为画布重新进入标注模式：暂时隐藏原钉图，开一个仅覆盖钉图所在屏幕的
+    /// overlay，把钉图图片直接当作 capturedImage 灌进 SelectionView，跳过选区阶段。
+    /// Enter / Esc 走原始流程（复制 / 静默保存 / 取消），结束时原钉图被 orderFront 回来。
+    func editPin(_ pin: PinnedImageWindow) {
+        guard !isCapturing else { return }
+
+        // 1. 选钉图所在屏幕（取相交面积最大的；保底用主屏）
+        let pinFrame = pin.frame
+        let screen = NSScreen.screens.max { a, b in
+            a.frame.intersection(pinFrame).area < b.frame.intersection(pinFrame).area
+        } ?? NSScreen.main ?? NSScreen.screens.first
+        guard let targetScreen = screen else { return }
+
+        // 2. 隐藏原钉图，标记待恢复
+        pinBeingEdited = pin
+        pin.orderOut(nil)
+
+        // 3. 启动 overlay（同 startCapture，但只一块屏幕）
+        isCapturing = true
+        NSCursor.crosshair.push()
+        let overlay = OverlayWindow(screen: targetScreen)
+        overlay.makeKeyAndOrderFront(nil)
+        overlayWindows.append(overlay)
+        NSApp.activate(ignoringOtherApps: true)
+        overlay.makeKey()
+
+        // 4. 钉图屏幕坐标 → SelectionView 局部坐标（overlay 与屏幕等大同源）
+        let local = NSRect(
+            x: pinFrame.origin.x - targetScreen.frame.origin.x,
+            y: pinFrame.origin.y - targetScreen.frame.origin.y,
+            width: pinFrame.width,
+            height: pinFrame.height
+        )
+
+        // 5. 直接进入 annotating，跳过选区阶段
+        (overlay.contentView as? SelectionView)?.startPinEdit(image: pin.currentImage, selectionInView: local)
     }
 
     // MARK: - 内联截图（不关闭覆盖层，回调图片给 SelectionView）
@@ -149,5 +191,15 @@ final class CaptureManager {
         }
         overlayWindows.removeAll()
         isCapturing = false
+
+        // 编辑期间隐藏的钉图：无论 Enter 还是 Esc 都还原（用户选择了"走原始流程"）
+        if let pin = pinBeingEdited {
+            pin.orderFront(nil)
+            pinBeingEdited = nil
+        }
     }
+}
+
+private extension NSRect {
+    var area: CGFloat { max(0, width) * max(0, height) }
 }

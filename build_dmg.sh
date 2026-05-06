@@ -204,7 +204,7 @@ BGEOF
     # 2. 挂载并美化
     echo "  美化 DMG 窗口布局..."
     local mount_dir
-    mount_dir=$(hdiutil attach "${DMG_RW}" -readwrite -noverify -noautoopen | grep "/Volumes/" | tail -1 | awk '{print $NF}')
+    mount_dir=$(hdiutil attach "${DMG_RW}" -readwrite -noverify -noautoopen | grep -o '/Volumes/.*' | tail -1)
 
     # 等待挂载完成
     sleep 1
