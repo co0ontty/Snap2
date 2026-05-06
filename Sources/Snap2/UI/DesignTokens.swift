@@ -25,14 +25,14 @@ enum Glass {
     // 按钮选中态
     static let selectedFill = NSColor.white.withAlphaComponent(0.22)
     static let hoverFill = NSColor.white.withAlphaComponent(0.10)
-    static let pressedFill = NSColor.white.withAlphaComponent(0.30)
+    static let pressedFill = NSColor.white.withAlphaComponent(0.45)
 
     // 间距
     static let toolbarPadX: CGFloat = 8
     static let toolbarPadY: CGFloat = 6
     static let buttonSize: CGFloat = 30
     static let groupSpacing: CGFloat = 6
-    static let separatorAlpha: CGFloat = 0.18
+    static let separatorAlpha: CGFloat = 0.28
 
     // 动画
     static let animDuration: CFTimeInterval = 0.18
@@ -53,9 +53,9 @@ enum LineWidthLevel: CGFloat, CaseIterable {
 
     var dotSize: CGFloat {
         switch self {
-        case .thin: return 4
-        case .medium: return 7
-        case .thick: return 10
+        case .thin: return 5
+        case .medium: return 9
+        case .thick: return 13
         }
     }
 }

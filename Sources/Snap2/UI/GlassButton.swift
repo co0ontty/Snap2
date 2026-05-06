@@ -22,6 +22,11 @@ final class GlassButton: NSButton {
         didSet { refreshState() }
     }
 
+    /// 危险/警示按钮：始终显示 accentColor 染色背景（用于关闭键等）
+    var isDestructive: Bool = false {
+        didSet { refreshState() }
+    }
+
     init(symbol: String? = nil, title: String = "", size: CGFloat = Glass.buttonSize, tooltip: String? = nil) {
         super.init(frame: NSRect(x: 0, y: 0, width: size, height: size))
         setup(symbol: symbol, title: title, size: size, tooltip: tooltip)
@@ -118,7 +123,11 @@ final class GlassButton: NSButton {
     private func refreshState() {
         CATransaction.begin()
         CATransaction.setAnimationDuration(Glass.animDuration)
-        if isPressed {
+        if isDestructive {
+            // 危险按钮：始终带 accent 染色，状态间叠加
+            let alpha: CGFloat = isPressed ? 0.55 : (isHovered ? 0.40 : 0.22)
+            bgLayer.backgroundColor = accentColor.withAlphaComponent(alpha).cgColor
+        } else if isPressed {
             bgLayer.backgroundColor = Glass.pressedFill.cgColor
         } else if isSelected {
             bgLayer.backgroundColor = Glass.selectedFill.cgColor
@@ -131,7 +140,7 @@ final class GlassButton: NSButton {
         strokeLayer.strokeColor = (isSelected && selectionGlows)
             ? accentColor.withAlphaComponent(0.85).cgColor
             : NSColor.clear.cgColor
-        contentTintColor = isSelected
+        contentTintColor = (isSelected || isDestructive)
             ? .white
             : NSColor.white.withAlphaComponent(isHovered ? 1.0 : 0.85)
         CATransaction.commit()

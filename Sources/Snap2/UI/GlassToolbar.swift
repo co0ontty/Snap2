@@ -110,9 +110,10 @@ final class GlassToolbar: NSView {
             stack.addArrangedSubview(b)
         }
 
-        // 关闭按钮单独样式（红 tint）
+        // 关闭按钮单独样式（红 tint，始终染色）
         let closeBtn = GlassButton(symbol: "xmark", size: Glass.buttonSize, tooltip: "关闭 (Esc)")
         closeBtn.accentColor = .systemRed
+        closeBtn.isDestructive = true
         closeBtn.target = self
         closeBtn.action = #selector(closeTapped)
         stack.addArrangedSubview(closeBtn)
@@ -168,10 +169,19 @@ final class GlassToolbar: NSView {
         delegate?.toolbarDidPickWidth(sender.level.rawValue)
     }
 
-    @objc private func undoTapped()  { delegate?.toolbarDidTapUndo() }
-    @objc private func saveTapped()  { delegate?.toolbarDidTapSave() }
-    @objc private func copyTapped()  { delegate?.toolbarDidTapCopy() }
-    @objc private func closeTapped() { delegate?.toolbarDidTapClose() }
+    // 操作类按钮异步派发：避免在 NSButton mouseDown tracking loop 内拆掉父面板，
+    // 导致后续状态更新落到已 orderOut 的窗口、动作"无反应"。
+    @objc private func undoTapped()  { dispatchAction { $0.toolbarDidTapUndo() } }
+    @objc private func saveTapped()  { dispatchAction { $0.toolbarDidTapSave() } }
+    @objc private func copyTapped()  { dispatchAction { $0.toolbarDidTapCopy() } }
+    @objc private func closeTapped() { dispatchAction { $0.toolbarDidTapClose() } }
+
+    private func dispatchAction(_ block: @escaping (GlassToolbarDelegate) -> Void) {
+        DispatchQueue.main.async { [weak self] in
+            guard let d = self?.delegate else { return }
+            block(d)
+        }
+    }
 
     /// 计算工具栏天然宽度（外部决定面板尺寸）
     func intrinsicWidth() -> CGFloat {

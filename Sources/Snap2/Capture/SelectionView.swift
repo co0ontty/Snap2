@@ -36,6 +36,10 @@ final class SelectionView: NSView {
     private var sizeBadgePanel: GlassPanel?
     private var sizeBadgeLabel: NSTextField?
 
+    // 内嵌文字编辑
+    private weak var activeTextField: InlineAnnotationTextField?
+    private var activeTextOrigin: NSPoint = .zero
+
     // MARK: - 视图设置
 
     override var isFlipped: Bool { false }
@@ -228,7 +232,8 @@ final class SelectionView: NSView {
             return
         }
 
-        let wasCreating = (selectionRect.width > 2 && selectionRect.height > 2)
+        // 拖动尺寸过小（<10px）视为误触，回到空选区
+        let wasCreating = (selectionRect.width > 10 && selectionRect.height > 10)
         isAdjusting = false
         dragOrigin = nil
         NSCursor.crosshair.set()
@@ -280,6 +285,12 @@ final class SelectionView: NSView {
     // MARK: - 键盘
 
     override func keyDown(with event: NSEvent) {
+        // 文字输入框激活时，把按键事件让给字段（含 Cmd+S 等避免触发宿主行为）
+        if activeTextField != nil {
+            super.keyDown(with: event)
+            return
+        }
+
         let modifiers = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.function, .numericPad, .capsLock])
@@ -413,24 +424,66 @@ final class SelectionView: NSView {
         }
     }
 
+    /// 在选区局部坐标 `point` 处弹出内嵌文字输入框；Enter 提交，Esc 取消，失焦自动提交。
+    /// 不再使用 NSAlert（在 .screenSaver 层级的 overlay 上方会被遮挡导致死锁）。
     private func promptText(at point: NSPoint) {
-        let alert = NSAlert()
-        alert.messageText = "输入标注文字"
-        alert.addButton(withTitle: "确定")
-        alert.addButton(withTitle: "取消")
-        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 280, height: 24))
-        tf.placeholderString = "在此输入..."
-        alert.accessoryView = tf
-        if alert.runModal() == .alertFirstButtonReturn, !tf.stringValue.isEmpty {
+        finishActiveText(commit: false)
+
+        let fontSize = max(currentLineWidth * 6, 14)
+        let font = NSFont.systemFont(ofSize: fontSize)
+        let lineHeight = ceil(font.boundingRectForFont.height)
+        let pad: CGFloat = 6  // 与 TextTool.draw 的 textPadding 一致
+
+        // 选区局部坐标 → 视图坐标
+        let viewX = selectionRect.origin.x + point.x - pad
+        let viewY = selectionRect.origin.y + point.y - pad
+
+        let tf = InlineAnnotationTextField(frame: NSRect(
+            x: viewX, y: viewY,
+            width: 220, height: lineHeight + pad * 2
+        ))
+        tf.font = font
+        tf.textColor = currentColor
+        tf.backgroundColor = NSColor.black.withAlphaComponent(0.2)
+        tf.drawsBackground = true
+        tf.isBezeled = false
+        tf.isBordered = false
+        tf.placeholderString = "输入文字"
+        tf.focusRingType = .none
+        tf.delegate = self
+        tf.wantsLayer = true
+        tf.layer?.cornerRadius = 4
+        tf.layer?.masksToBounds = true
+
+        activeTextField = tf
+        activeTextOrigin = point
+        addSubview(tf)
+        window?.makeFirstResponder(tf)
+        needsDisplay = true
+    }
+
+    private func finishActiveText(commit: Bool) {
+        guard let tf = activeTextField else { return }
+        let text = tf.stringValue
+        let origin = activeTextOrigin
+        activeTextField = nil
+        tf.delegate = nil
+        tf.removeFromSuperview()
+        // 仅在选区视图仍在响应链时回收 first responder
+        if window?.firstResponder !== self {
+            window?.makeFirstResponder(self)
+        }
+
+        if commit, !text.isEmpty {
             let el = AnnotationElement(toolType: .text, color: currentColor, lineWidth: currentLineWidth)
-            el.startPoint = point
-            el.endPoint = point
-            el.text = tf.stringValue
+            el.startPoint = origin
+            el.endPoint = origin
+            el.text = text
             el.font = NSFont.systemFont(ofSize: max(currentLineWidth * 6, 14))
             undoStack.append(elements)
             elements.append(el)
-            needsDisplay = true
         }
+        needsDisplay = true
     }
 
     // MARK: - 操作
@@ -581,11 +634,19 @@ final class SelectionView: NSView {
         let height = GlassToolbar.toolbarHeight
 
         let panel = GlassPanel(size: NSSize(width: width, height: height))
-        toolbar.frame = NSRect(x: 0, y: 0, width: width, height: height)
-        toolbar.autoresizingMask = [.width, .height]
+        toolbar.translatesAutoresizingMaskIntoConstraints = false
         panel.contentBox.addSubview(toolbar)
+        NSLayoutConstraint.activate([
+            toolbar.topAnchor.constraint(equalTo: panel.contentBox.topAnchor),
+            toolbar.bottomAnchor.constraint(equalTo: panel.contentBox.bottomAnchor),
+            toolbar.leadingAnchor.constraint(equalTo: panel.contentBox.leadingAnchor),
+            toolbar.trailingAnchor.constraint(equalTo: panel.contentBox.trailingAnchor),
+        ])
 
-        positionToolbar(panel)
+        let target = toolbarTargetOrigin(width: panel.frame.width)
+        // 入场起点：从下方 16px + 透明
+        panel.setFrameOrigin(NSPoint(x: target.x, y: target.y - 16))
+        panel.alphaValue = 0
 
         if let parent = window {
             parent.addChildWindow(panel, ordered: .above)
@@ -593,16 +654,47 @@ final class SelectionView: NSView {
         panel.orderFront(nil)
         toolbarPanel = panel
         toolbarView = toolbar
+
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.22
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = 1.0
+            panel.animator().setFrameOrigin(target)
+        }
     }
 
-    private func positionToolbar(_ panel: GlassPanel) {
-        guard let screen = window?.screen ?? NSScreen.main else { return }
-        // 贴屏幕底部居中（visibleFrame 已避开 dock）
+    /// 工具栏目标原点：贴选区下沿外侧；放不下则吸附到选区内部底缘。
+    /// 水平随选区中心，并钳制到 visibleFrame 内。
+    private func toolbarTargetOrigin(width: CGFloat) -> NSPoint {
+        guard let pw = window, let screen = pw.screen ?? NSScreen.main else { return .zero }
         let visible = screen.visibleFrame
-        let bottomGap: CGFloat = 8
-        let x = visible.minX + (visible.width - panel.frame.width) / 2
-        let y = visible.minY + bottomGap
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        let height = GlassToolbar.toolbarHeight
+        let gap: CGFloat = 8
+        let edgeMargin: CGFloat = 8
+
+        // 选区在屏幕坐标系中的关键点
+        let so = pw.frame.origin
+        let selBottomY = so.y + selectionRect.minY
+        let selCenterX = so.x + selectionRect.midX
+
+        // 水平：选区水平中心，钳到 visible 内
+        var x = selCenterX - width / 2
+        let minX = visible.minX + edgeMargin
+        let maxX = visible.maxX - width - edgeMargin
+        if maxX >= minX {
+            x = max(minX, min(x, maxX))
+        }
+
+        // 垂直：默认在选区下方外侧
+        var y = selBottomY - gap - height
+        if y < visible.minY + edgeMargin {
+            // 下方放不下（如选区贴底/全屏）：吸附到选区内部底缘
+            y = selBottomY + gap
+            let maxOriginY = visible.maxY - height - edgeMargin
+            y = max(visible.minY + edgeMargin, min(y, maxOriginY))
+        }
+
+        return NSPoint(x: x, y: y)
     }
 
     private func removeToolbar() {
@@ -655,7 +747,7 @@ final class SelectionView: NSView {
         let w = max(110, ceil(label.frame.width) + 24)
         panel.resize(to: NSSize(width: w, height: 28))
 
-        // 位置：选区上方居中；放不下放下面
+        // 位置：选区上方居中；放不下放下面；最后再钳制到屏幕可视区
         let so = pw.frame.origin
         var x = so.x + selectionRect.midX - w / 2
         var y = so.y + selectionRect.maxY + 8
@@ -664,6 +756,7 @@ final class SelectionView: NSView {
             y = so.y + selectionRect.minY - 28 - 8
         }
         x = max(so.x + 8, min(x, so.x + screenFrame.width - w - 8))
+        y = max(so.y + 8, min(y, so.y + screenFrame.height - 28 - 8))
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 
@@ -679,6 +772,11 @@ final class SelectionView: NSView {
     // MARK: - 关闭清理
 
     func prepareForClose() {
+        if let tf = activeTextField {
+            tf.delegate = nil
+            tf.removeFromSuperview()
+            activeTextField = nil
+        }
         removeToolbar()
         hideSizeBadge()
     }
@@ -722,4 +820,30 @@ extension SelectionView: GlassToolbarDelegate {
     func toolbarDidTapSave() { performSave() }
     func toolbarDidTapCopy() { copyAndClose() }
     func toolbarDidTapClose() { CaptureManager.shared.cancelCapture() }
+}
+
+// MARK: - 内嵌文字输入
+
+/// 标注文字输入框。继承 NSTextField 仅为给类型加身份标识，便于在 SelectionView 引用。
+final class InlineAnnotationTextField: NSTextField {}
+
+extension SelectionView: NSTextFieldDelegate {
+    /// 拦截 Esc / Enter，分别走取消与提交。
+    func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
+        switch commandSelector {
+        case #selector(NSResponder.cancelOperation(_:)):
+            finishActiveText(commit: false)
+            return true
+        case #selector(NSResponder.insertNewline(_:)):
+            finishActiveText(commit: true)
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// 失焦自动提交（点击工具栏切工具、点别的位置等）。
+    func controlTextDidEndEditing(_ obj: Notification) {
+        finishActiveText(commit: true)
+    }
 }
