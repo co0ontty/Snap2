@@ -37,10 +37,22 @@ final class SelectionView: NSView {
     private var toolbarView: GlassToolbar?
     private var sizeBadgePanel: GlassPanel?
     private var sizeBadgeLabel: NSTextField?
+    private var toolbarFadeTimer: Timer?
+    /// 收起态透明度（仍可看见以便用户找到）
+    private let toolbarDimAlpha: CGFloat = 0.28
 
     // 内嵌文字编辑
     private weak var activeTextField: InlineAnnotationTextField?
     private var activeTextOrigin: NSPoint = .zero
+
+    // 拖动钉图
+    private var isDraggingPin: Bool = false
+    /// 拖动期间幽灵预览的左下角（视图坐标）
+    private var pinDragOrigin: NSPoint = .zero
+    /// 鼠标按下时距选区左下角的偏移（拖动中保持指针对应原始位置）
+    private var pinDragHandOffset: NSPoint = .zero
+    private let pinHandleSize: CGFloat = 28
+    private let pinHandleInset: CGFloat = 6
 
     // MARK: - 视图设置
 
@@ -96,6 +108,8 @@ final class SelectionView: NSView {
             }
             drawAnnotations(in: context)
             drawAnnotationFrame(in: context)
+            drawPinHandle(in: context)
+            drawPinDragGhost(in: context)
         }
     }
 
@@ -139,6 +153,65 @@ final class SelectionView: NSView {
         NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
         context.setLineWidth(1.5)
         context.stroke(selectionRect)
+        context.restoreGState()
+    }
+
+    /// 选区左上角的拖动手柄（三横线 ≡）。用户从这里拖出去即新建桌面钉图。
+    private func pinHandleRect() -> NSRect? {
+        guard mode == .annotating, !isDraggingPin else { return nil }
+        guard selectionRect.width > pinHandleSize + pinHandleInset * 2,
+              selectionRect.height > pinHandleSize + pinHandleInset * 2 else { return nil }
+        return NSRect(
+            x: selectionRect.minX + pinHandleInset,
+            y: selectionRect.maxY - pinHandleSize - pinHandleInset,
+            width: pinHandleSize, height: pinHandleSize
+        )
+    }
+
+    private func drawPinHandle(in context: CGContext) {
+        guard let r = pinHandleRect() else { return }
+        context.saveGState()
+
+        // 圆角暗色背景
+        let bg = CGPath(roundedRect: r, cornerWidth: 6, cornerHeight: 6, transform: nil)
+        context.addPath(bg)
+        NSColor.black.withAlphaComponent(0.55).setFill()
+        context.fillPath()
+
+        // 1px 白色描边突出可点击
+        context.addPath(bg)
+        context.setLineWidth(1)
+        NSColor.white.withAlphaComponent(0.30).setStroke()
+        context.strokePath()
+
+        // 三横线（≡）
+        let lineLen: CGFloat = 12
+        let spacing: CGFloat = 4
+        let midX = r.midX
+        let midY = r.midY
+        context.setLineWidth(1.5)
+        context.setLineCap(.round)
+        NSColor.white.withAlphaComponent(0.92).setStroke()
+        for i in -1...1 {
+            let y = midY + CGFloat(i) * spacing
+            context.move(to: CGPoint(x: midX - lineLen / 2, y: y))
+            context.addLine(to: CGPoint(x: midX + lineLen / 2, y: y))
+        }
+        context.strokePath()
+
+        context.restoreGState()
+    }
+
+    /// 拖动钉图时跟随光标的幽灵预览
+    private func drawPinDragGhost(in context: CGContext) {
+        guard isDraggingPin, let img = capturedImage else { return }
+        let rect = NSRect(origin: pinDragOrigin, size: selectionRect.size)
+        img.draw(in: rect, from: .zero, operation: .sourceOver, fraction: 0.85)
+
+        context.saveGState()
+        NSColor.white.withAlphaComponent(0.6).setStroke()
+        context.setLineWidth(1.5)
+        context.stroke(rect)
         context.restoreGState()
     }
 
@@ -346,6 +419,7 @@ final class SelectionView: NSView {
             case "z": performUndo(); return
             case "s": performSave(); return
             case "c": performCopy(); return
+            case "p": performPinAtSelection(); return
             default: break
             }
         }
@@ -431,6 +505,24 @@ final class SelectionView: NSView {
     // MARK: - 标注鼠标
 
     private func handleAnnotationMouseDown(p: NSPoint, event: NSEvent) {
+        // 命中拖动手柄 → 进入"拖动钉图"流程
+        if let handle = pinHandleRect(), handle.contains(p) {
+            isDraggingPin = true
+            // 鼠标在选区中的偏移；幽灵预览原点 = 鼠标 - 偏移，保证视觉连续
+            pinDragHandOffset = NSPoint(
+                x: p.x - selectionRect.minX,
+                y: p.y - selectionRect.minY
+            )
+            pinDragOrigin = NSPoint(
+                x: p.x - pinDragHandOffset.x,
+                y: p.y - pinDragHandOffset.y
+            )
+            NSCursor.closedHand.set()
+            window?.invalidateCursorRects(for: self)
+            needsDisplay = true
+            return
+        }
+
         guard selectionRect.contains(p) else { return }
         let local = NSPoint(x: p.x - selectionRect.origin.x,
                             y: p.y - selectionRect.origin.y)
@@ -449,6 +541,15 @@ final class SelectionView: NSView {
     }
 
     private func handleAnnotationMouseDragged(p: NSPoint) {
+        if isDraggingPin {
+            pinDragOrigin = NSPoint(
+                x: p.x - pinDragHandOffset.x,
+                y: p.y - pinDragHandOffset.y
+            )
+            needsDisplay = true
+            return
+        }
+
         guard let el = currentElement else { return }
         let local = NSPoint(x: p.x - selectionRect.origin.x,
                             y: p.y - selectionRect.origin.y)
@@ -458,6 +559,11 @@ final class SelectionView: NSView {
     }
 
     private func handleAnnotationMouseUp(p: NSPoint) {
+        if isDraggingPin {
+            commitPinDrag(at: p)
+            return
+        }
+
         guard let el = currentElement else { return }
         let local = NSPoint(x: p.x - selectionRect.origin.x,
                             y: p.y - selectionRect.origin.y)
@@ -470,6 +576,29 @@ final class SelectionView: NSView {
         }
         currentElement = nil
         needsDisplay = true
+    }
+
+    /// 拖动手柄落点：以最终位置创建 PinnedImageWindow，关闭整个截图会话。
+    /// 即便用户点了一下没拖（pinDragOrigin == 选区原位），也按"原位置钉图"处理。
+    private func commitPinDrag(at endPoint: NSPoint) {
+        guard let win = window else {
+            isDraggingPin = false
+            return
+        }
+        let dropOrigin = NSPoint(
+            x: endPoint.x - pinDragHandOffset.x,
+            y: endPoint.y - pinDragHandOffset.y
+        )
+        let screenOrigin = NSPoint(
+            x: win.frame.origin.x + dropOrigin.x,
+            y: win.frame.origin.y + dropOrigin.y
+        )
+        let image = renderFinalImage()
+
+        isDraggingPin = false
+        NSCursor.crosshair.set()
+        PinnedImageWindow.show(image: image, at: screenOrigin)
+        CaptureManager.shared.finishAndClose()
     }
 
     private func isValid(_ el: AnnotationElement) -> Bool {
@@ -739,11 +868,44 @@ final class SelectionView: NSView {
         toolbarPanel = panel
         toolbarView = toolbar
 
-        NSAnimationContext.runAnimationGroup { ctx in
+        // hover 折叠：鼠标进入工具栏 → 全亮；离开 → 渐隐到半透明（仍可见）
+        toolbar.onHoverEnter = { [weak self] in
+            self?.cancelToolbarFade()
+            self?.fadeToolbar(to: 1.0, duration: 0.15)
+        }
+        toolbar.onHoverExit = { [weak self] in
+            self?.scheduleToolbarFade()
+        }
+
+        NSAnimationContext.runAnimationGroup({ ctx in
             ctx.duration = 0.22
             ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
             panel.animator().alphaValue = 1.0
             panel.animator().setFrameOrigin(target)
+        }, completionHandler: { [weak self] in
+            // 入场后若鼠标不在工具栏内，1.5s 后自动收起
+            self?.scheduleToolbarFade()
+        })
+    }
+
+    private func scheduleToolbarFade() {
+        cancelToolbarFade()
+        toolbarFadeTimer = Timer.scheduledTimer(withTimeInterval: 1.5, repeats: false) { [weak self] _ in
+            self?.fadeToolbar(to: self?.toolbarDimAlpha ?? 0.28, duration: 0.30)
+        }
+    }
+
+    private func cancelToolbarFade() {
+        toolbarFadeTimer?.invalidate()
+        toolbarFadeTimer = nil
+    }
+
+    private func fadeToolbar(to alpha: CGFloat, duration: TimeInterval) {
+        guard let panel = toolbarPanel else { return }
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = duration
+            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+            panel.animator().alphaValue = alpha
         }
     }
 
@@ -782,6 +944,7 @@ final class SelectionView: NSView {
     }
 
     private func removeToolbar() {
+        cancelToolbarFade()
         if let panel = toolbarPanel {
             panel.parent?.removeChildWindow(panel)
             panel.orderOut(nil)
@@ -884,6 +1047,10 @@ final class SelectionView: NSView {
             addCursorRect(bounds, cursor: .crosshair)
         } else {
             addCursorRect(selectionRect, cursor: .crosshair)
+            // 拖动手柄区域：抓握光标提示可拖
+            if let h = pinHandleRect() {
+                addCursorRect(h, cursor: .openHand)
+            }
         }
     }
 }
@@ -903,7 +1070,20 @@ extension SelectionView: GlassToolbarDelegate {
     func toolbarDidTapUndo() { performUndo() }
     func toolbarDidTapSave() { performSave() }
     func toolbarDidTapCopy() { copyAndClose() }
+    func toolbarDidTapPin()  { performPinAtSelection() }
     func toolbarDidTapClose() { CaptureManager.shared.cancelCapture() }
+
+    /// 工具栏点击或 ⌘P 触发：在选区原位置创建一张钉图，并结束本次截图会话
+    private func performPinAtSelection() {
+        guard mode == .annotating, let win = window else { return }
+        let image = renderFinalImage()
+        let screenOrigin = NSPoint(
+            x: win.frame.origin.x + selectionRect.origin.x,
+            y: win.frame.origin.y + selectionRect.origin.y
+        )
+        PinnedImageWindow.show(image: image, at: screenOrigin)
+        CaptureManager.shared.finishAndClose()
+    }
 }
 
 // MARK: - 内嵌文字输入

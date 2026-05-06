@@ -7,6 +7,7 @@ protocol GlassToolbarDelegate: AnyObject {
     func toolbarDidTapUndo()
     func toolbarDidTapSave()
     func toolbarDidTapCopy()
+    func toolbarDidTapPin()
     func toolbarDidTapClose()
 }
 
@@ -32,12 +33,40 @@ final class GlassToolbar: NSView {
     static let toolbarHeight: CGFloat = 46
     static let toolbarPadding: CGFloat = 10
 
+    // 鼠标进入/离开整体工具栏时通知（外部用来做面板的折叠/展开）
+    var onHoverEnter: (() -> Void)?
+    var onHoverExit: (() -> Void)?
+    private var hoverArea: NSTrackingArea?
+
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
         buildLayout()
     }
     required init?(coder: NSCoder) { fatalError() }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let a = hoverArea { removeTrackingArea(a) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        hoverArea = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        super.mouseEntered(with: event)
+        onHoverEnter?()
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        super.mouseExited(with: event)
+        onHoverExit?()
+    }
 
     func setSelectedTool(_ tool: AnnotationToolType) { selectedTool = tool }
     func setSelectedColor(_ color: NSColor) {
@@ -102,6 +131,7 @@ final class GlassToolbar: NSView {
             ("arrow.uturn.backward", "撤销 (⌘Z)", #selector(undoTapped)),
             ("square.and.arrow.down", "保存 (⌘S)", #selector(saveTapped)),
             ("doc.on.clipboard", "复制 (↩)", #selector(copyTapped)),
+            ("pin.fill", "钉在桌面 (⌘P)", #selector(pinTapped)),
         ]
         for (sym, tip, sel) in actions {
             let b = GlassButton(symbol: sym, size: Glass.buttonSize, tooltip: tip)
@@ -174,6 +204,7 @@ final class GlassToolbar: NSView {
     @objc private func undoTapped()  { dispatchAction { $0.toolbarDidTapUndo() } }
     @objc private func saveTapped()  { dispatchAction { $0.toolbarDidTapSave() } }
     @objc private func copyTapped()  { dispatchAction { $0.toolbarDidTapCopy() } }
+    @objc private func pinTapped()   { dispatchAction { $0.toolbarDidTapPin() } }
     @objc private func closeTapped() { dispatchAction { $0.toolbarDidTapClose() } }
 
     private func dispatchAction(_ block: @escaping (GlassToolbarDelegate) -> Void) {
@@ -185,17 +216,24 @@ final class GlassToolbar: NSView {
 
     /// 计算工具栏天然宽度（外部决定面板尺寸）
     func intrinsicWidth() -> CGFloat {
-        let toolsW = CGFloat(AnnotationToolType.allCases.count) * Glass.buttonSize
-        let colorsW = CGFloat(AnnotationPalette.colors.count) * 22
-        let widthsW = CGFloat(LineWidthLevel.allCases.count) * 26
-        let actionsW = 4 * Glass.buttonSize
-        let separators: CGFloat = 4 * 1
-        let spacings: CGFloat = Glass.groupSpacing * CGFloat(
-            AnnotationToolType.allCases.count + AnnotationPalette.colors.count
-            + LineWidthLevel.allCases.count + 4 + 4 - 1
-        )
+        let toolsCount = AnnotationToolType.allCases.count
+        let colorsCount = AnnotationPalette.colors.count
+        let widthsCount = LineWidthLevel.allCases.count
+        let actionsCount = 5  // undo / save / copy / pin / close
+        let separatorsCount = 3 // 工具｜颜色｜线宽｜操作
+
+        let toolsW = CGFloat(toolsCount) * Glass.buttonSize
+        let colorsW = CGFloat(colorsCount) * 22
+        let widthsW = CGFloat(widthsCount) * 26
+        let actionsW = CGFloat(actionsCount) * Glass.buttonSize
+        let separatorsW = CGFloat(separatorsCount) * 1
+
+        // stack 子视图总数 - 1 = spacing 数
+        let totalItems = toolsCount + colorsCount + widthsCount + actionsCount + separatorsCount
+        let spacingsW = Glass.groupSpacing * CGFloat(max(0, totalItems - 1))
+
         let pad = Self.toolbarPadding * 2
-        return toolsW + colorsW + widthsW + actionsW + separators + spacings + pad
+        return toolsW + colorsW + widthsW + actionsW + separatorsW + spacingsW + pad
     }
 }
 
