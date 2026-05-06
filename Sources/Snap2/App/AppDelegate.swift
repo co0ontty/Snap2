@@ -27,6 +27,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         } else {
             SettingsWindowController.shared.showWindow()
         }
+
+        // 启动 3s 后台后台检查更新（24h 防抖在 UpdateChecker 内部处理）
+        DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
+            UpdateChecker.shared.checkOnLaunchIfNeeded()
+        }
     }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ sender: NSApplication) -> Bool {

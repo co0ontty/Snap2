@@ -34,6 +34,10 @@ enum UDKey {
     static let jpegQuality = "jpegQuality"
     static let hasCompletedOnboarding = "hasCompletedOnboarding"
     static let enterAction = "enterAction"
+    /// 上次检查更新的时间戳（秒）
+    static let lastUpdateCheckAt = "lastUpdateCheckAt"
+    /// 上次检测到的最新版本号（不含 v 前缀），用于菜单栏角标持久化
+    static let lastKnownLatestVersion = "lastKnownLatestVersion"
 }
 
 /// 回车键行为
@@ -56,6 +60,7 @@ extension Notification.Name {
     static let hotkeyChanged = Notification.Name("com.chuer.snap2.hotkeyChanged")
     static let annotationToolChanged = Notification.Name("com.chuer.snap2.annotationToolChanged")
     static let settingsChanged = Notification.Name("com.chuer.snap2.settingsChanged")
+    static let updateAvailable = Notification.Name("com.chuer.snap2.updateAvailable")
 }
 
 // MARK: - Drawing Defaults

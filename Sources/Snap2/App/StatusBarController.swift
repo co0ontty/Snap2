@@ -9,6 +9,7 @@ class StatusBarController {
 
     private var statusItem: NSStatusItem
     private var captureItem: NSMenuItem!
+    private var updateItem: NSMenuItem!
 
     private var settingsWindowController: SettingsWindowController { SettingsWindowController.shared }
 
@@ -26,6 +27,17 @@ class StatusBarController {
             name: .hotkeyChanged,
             object: nil
         )
+        // 监听更新可用通知，刷新菜单条目
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleUpdateAvailable(_:)),
+            name: .updateAvailable,
+            object: nil
+        )
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: - 配置
@@ -75,6 +87,24 @@ class StatusBarController {
         settingsItem.target = self
         settingsItem.image = NSImage(systemSymbolName: "gearshape", accessibilityDescription: nil)
         menu.addItem(settingsItem)
+
+        // 检查更新
+        updateItem = NSMenuItem(
+            title: "检查更新...",
+            action: #selector(checkForUpdate),
+            keyEquivalent: ""
+        )
+        updateItem.target = self
+        updateItem.image = NSImage(systemSymbolName: "arrow.down.circle", accessibilityDescription: nil)
+        menu.addItem(updateItem)
+
+        // 上次启动检查已发现新版本：直接以"新版本可用"形态出现（语义版本比较）
+        if let latest = UserDefaults.standard.string(forKey: UDKey.lastKnownLatestVersion),
+           !latest.isEmpty,
+           UpdateChecker.isVersionNewer(latest, than: UpdateChecker.shared.currentVersion)
+        {
+            applyUpdateAvailable(latestVersion: latest)
+        }
 
         // 关于
         let aboutItem = NSMenuItem(
@@ -129,5 +159,54 @@ class StatusBarController {
             carbonModifiers: manager.currentModifiers
         )
         captureItem?.title = "区域截图    \(hotkeyDisplay)"
+    }
+
+    // MARK: - 更新检查
+
+    @objc private func checkForUpdate() {
+        UpdateChecker.shared.checkManually { [weak self] outcome in
+            self?.presentCheckResult(outcome)
+        }
+    }
+
+    private func presentCheckResult(_ outcome: UpdateChecker.Outcome) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        switch outcome {
+        case .upToDate(let current):
+            alert.messageText = "已是最新版本"
+            alert.informativeText = "当前 v\(current) 已是最新。"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+        case .newer(let current, let latest, let url):
+            alert.messageText = "发现新版本 v\(latest)"
+            alert.informativeText = "你正在使用 v\(current)。要查看更新内容吗？"
+            alert.alertStyle = .informational
+            alert.addButton(withTitle: "查看 Release")
+            alert.addButton(withTitle: "稍后")
+            if alert.runModal() == .alertFirstButtonReturn {
+                NSWorkspace.shared.open(url)
+            }
+        case .error(let msg):
+            alert.messageText = "检查更新失败"
+            alert.informativeText = msg
+            alert.alertStyle = .warning
+            alert.addButton(withTitle: "好")
+            alert.runModal()
+        }
+    }
+
+    @objc private func handleUpdateAvailable(_ note: Notification) {
+        guard let outcome = note.object as? UpdateChecker.Outcome,
+              case .newer(_, let latest, _) = outcome else { return }
+        applyUpdateAvailable(latestVersion: latest)
+    }
+
+    private func applyUpdateAvailable(latestVersion: String) {
+        updateItem?.title = "新版本 v\(latestVersion) 可用..."
+        updateItem?.image = NSImage(systemSymbolName: "arrow.down.circle.fill",
+                                    accessibilityDescription: nil)
+        statusItem.button?.toolTip = "Snap² · 新版本 v\(latestVersion) 可用"
     }
 }
