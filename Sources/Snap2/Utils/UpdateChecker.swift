@@ -1,10 +1,10 @@
 import Foundation
 
-/// 通过 GitHub Tags API 检查 Snap² 是否有新版本。
+/// 通过 GitHub Releases API 检查 Snap² 是否有新版本。
 /// 不依赖 Sparkle 等外部框架，仅用 URLSession + JSONSerialization。
 ///
-/// 用 tags 接口而非 releases/latest——后者要求显式发布 Release，
-/// 仓库当前只推 tag，tags 接口对此场景更稳。
+/// 使用 /releases/latest 而非 /tags：tags 接口拿不到 release assets，
+/// 自动下载需要 assets[].browser_download_url。
 final class UpdateChecker {
 
     static let shared = UpdateChecker()
@@ -17,9 +17,24 @@ final class UpdateChecker {
     /// 网络超时
     private let timeout: TimeInterval = 10
 
+    /// release 中的可下载产物。优先 ZIP（自动更新流程更稳，不需要 hdiutil），DMG 兜底。
+    struct ReleaseAssets {
+        let zipURL: URL?
+        let zipSize: Int64?
+        let dmgURL: URL?
+        let dmgSize: Int64?
+
+        /// 自动更新优先选 zip，没有则用 dmg
+        var preferredDownload: (url: URL, isZip: Bool, size: Int64?)? {
+            if let zip = zipURL { return (zip, true, zipSize) }
+            if let dmg = dmgURL { return (dmg, false, dmgSize) }
+            return nil
+        }
+    }
+
     enum Outcome {
         case upToDate(current: String)
-        case newer(current: String, latest: String, releaseURL: URL)
+        case newer(current: String, latest: String, releaseURL: URL, assets: ReleaseAssets)
         case error(String)
     }
 
@@ -55,7 +70,7 @@ final class UpdateChecker {
     private func persist(_ result: Outcome) {
         UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: UDKey.lastUpdateCheckAt)
         switch result {
-        case .newer(_, let latest, _):
+        case .newer(_, let latest, _, _):
             UserDefaults.standard.set(latest, forKey: UDKey.lastKnownLatestVersion)
             NotificationCenter.default.post(name: .updateAvailable, object: result)
         case .upToDate:
@@ -81,7 +96,7 @@ final class UpdateChecker {
     }
 
     private func fetch() async -> Outcome {
-        guard let url = URL(string: "https://api.github.com/repos/\(repoSlug)/tags") else {
+        guard let url = URL(string: "https://api.github.com/repos/\(repoSlug)/releases/latest") else {
             return .error("URL 构造失败")
         }
         var request = URLRequest(url: url)
@@ -94,21 +109,26 @@ final class UpdateChecker {
             guard let http = response as? HTTPURLResponse else {
                 return .error("无效响应")
             }
+            // 404 通常意味着仓库还没有正式 publish 过 release（只有 tag）
+            if http.statusCode == 404 {
+                return .error("尚未发布 Release。请到 GitHub 先 Publish release 并上传产物。")
+            }
             guard http.statusCode == 200 else {
                 return .error("GitHub 返回 HTTP \(http.statusCode)")
             }
-            guard let arr = try JSONSerialization.jsonObject(with: data) as? [[String: Any]] else {
-                return .error("解析 tags 失败")
+            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
+                return .error("解析 release 失败")
             }
-            guard let best = pickLatestTag(in: arr) else {
-                return .error("未找到有效版本标签")
+            guard let parsed = parseRelease(obj) else {
+                return .error("未找到有效版本号")
             }
-            let releaseURL = URL(string: "https://github.com/\(repoSlug)/releases/tag/\(best.rawTag)")
-                ?? URL(string: "https://github.com/\(repoSlug)/releases")!
 
-            switch compare(currentVersion, best.semver) {
+            switch compare(currentVersion, parsed.semver) {
             case .orderedAscending:
-                return .newer(current: currentVersion, latest: best.semver, releaseURL: releaseURL)
+                return .newer(current: currentVersion,
+                              latest: parsed.semver,
+                              releaseURL: parsed.releaseURL,
+                              assets: parsed.assets)
             default:
                 return .upToDate(current: currentVersion)
             }
@@ -117,19 +137,47 @@ final class UpdateChecker {
         }
     }
 
-    /// 按语义版本数值排序挑出最高的（容忍非数字 tag、跳过 lexicographic 排序坑）
-    private func pickLatestTag(in tags: [[String: Any]]) -> (rawTag: String, semver: String)? {
-        let parsed: [(String, String, [Int])] = tags.compactMap { obj in
-            guard let name = obj["name"] as? String else { return nil }
-            let stripped = name.hasPrefix("v") ? String(name.dropFirst()) : name
-            let parts = stripped.split(separator: ".").compactMap { Int($0) }
-            guard !parts.isEmpty else { return nil }
-            return (name, stripped, parts)
+    private struct ParsedRelease {
+        let semver: String
+        let releaseURL: URL
+        let assets: ReleaseAssets
+    }
+
+    /// 从 /releases/latest 响应中提取版本号、release 页面 URL 与下载资产
+    private func parseRelease(_ obj: [String: Any]) -> ParsedRelease? {
+        guard let tagName = obj["tag_name"] as? String else { return nil }
+        let stripped = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
+        guard !stripped.split(separator: ".").compactMap({ Int($0) }).isEmpty else { return nil }
+
+        let releaseURL = (obj["html_url"] as? String).flatMap(URL.init(string:))
+            ?? URL(string: "https://github.com/\(repoSlug)/releases/tag/\(tagName)")
+            ?? URL(string: "https://github.com/\(repoSlug)/releases")!
+
+        let rawAssets = (obj["assets"] as? [[String: Any]]) ?? []
+        var zipURL: URL?
+        var zipSize: Int64?
+        var dmgURL: URL?
+        var dmgSize: Int64?
+        for asset in rawAssets {
+            guard let name = (asset["name"] as? String)?.lowercased(),
+                  let dl = asset["browser_download_url"] as? String,
+                  let url = URL(string: dl) else { continue }
+            let size = (asset["size"] as? Int64) ?? (asset["size"] as? NSNumber).map { $0.int64Value }
+            if name.hasSuffix(".zip"), zipURL == nil {
+                zipURL = url
+                zipSize = size
+            } else if name.hasSuffix(".dmg"), dmgURL == nil {
+                dmgURL = url
+                dmgSize = size
+            }
         }
-        let best = parsed.max { lhs, rhs in
-            compareInts(lhs.2, rhs.2) == .orderedAscending
-        }
-        return best.map { ($0.0, $0.1) }
+
+        return ParsedRelease(
+            semver: stripped,
+            releaseURL: releaseURL,
+            assets: ReleaseAssets(zipURL: zipURL, zipSize: zipSize,
+                                  dmgURL: dmgURL, dmgSize: dmgSize)
+        )
     }
 
     private func compare(_ a: String, _ b: String) -> ComparisonResult {

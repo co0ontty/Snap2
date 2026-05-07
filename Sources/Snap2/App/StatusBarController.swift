@@ -11,6 +11,9 @@ class StatusBarController {
     private var captureItem: NSMenuItem!
     private var updateItem: NSMenuItem!
 
+    /// 自动更新进度窗口，避免被 ARC 提前回收
+    private var updateProgressWindow: UpdateProgressWindow?
+
     private var settingsWindowController: SettingsWindowController { SettingsWindowController.shared }
 
     // MARK: - 初始化
@@ -179,15 +182,9 @@ class StatusBarController {
             alert.alertStyle = .informational
             alert.addButton(withTitle: "好")
             alert.runModal()
-        case .newer(let current, let latest, let url):
-            alert.messageText = "发现新版本 v\(latest)"
-            alert.informativeText = "你正在使用 v\(current)。要查看更新内容吗？"
-            alert.alertStyle = .informational
-            alert.addButton(withTitle: "查看 Release")
-            alert.addButton(withTitle: "稍后")
-            if alert.runModal() == .alertFirstButtonReturn {
-                NSWorkspace.shared.open(url)
-            }
+        case .newer(let current, let latest, let url, let assets):
+            presentNewerAlert(current: current, latest: latest, releaseURL: url, assets: assets)
+            return
         case .error(let msg):
             alert.messageText = "检查更新失败"
             alert.informativeText = msg
@@ -197,9 +194,129 @@ class StatusBarController {
         }
     }
 
+    /// 新版本弹窗。能自动下载 + 当前 .app 路径可写时，提供「立即更新」按钮；
+    /// 否则只能跳转 Release 页面手动下载。
+    private func presentNewerAlert(current: String,
+                                   latest: String,
+                                   releaseURL: URL,
+                                   assets: UpdateChecker.ReleaseAssets) {
+        let alert = NSAlert()
+        alert.messageText = "发现新版本 v\(latest)"
+        alert.alertStyle = .informational
+
+        let canAutoUpdate = assets.preferredDownload != nil && UpdateInstaller.canInstallInPlace
+        if canAutoUpdate {
+            alert.informativeText = """
+            当前版本 v\(current)。
+
+            点击「立即更新」自动下载并替换。
+
+            注意：当前版本未使用 Apple Developer ID 签名，更新后系统会要求重新授予「屏幕录制」权限（系统设置 > 隐私与安全性 > 屏幕录制）。
+            """
+            alert.addButton(withTitle: "立即更新")
+            alert.addButton(withTitle: "查看 Release")
+            alert.addButton(withTitle: "稍后")
+        } else {
+            let reason: String
+            if assets.preferredDownload == nil {
+                reason = "Release 没有上传可下载的产物（zip/dmg），请到 GitHub 手动下载。"
+            } else {
+                reason = "当前 app 所在目录不可写（\(Bundle.main.bundlePath)），请先把 app 拖到 Applications 文件夹后再使用自动更新。"
+            }
+            alert.informativeText = "当前版本 v\(current)。\n\n\(reason)"
+            alert.addButton(withTitle: "查看 Release")
+            alert.addButton(withTitle: "稍后")
+        }
+
+        let response = alert.runModal()
+        if canAutoUpdate {
+            switch response {
+            case .alertFirstButtonReturn:
+                startAutoUpdate(assets: assets, releaseURL: releaseURL)
+            case .alertSecondButtonReturn:
+                NSWorkspace.shared.open(releaseURL)
+            default:
+                break
+            }
+        } else if response == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(releaseURL)
+        }
+    }
+
+    private func startAutoUpdate(assets: UpdateChecker.ReleaseAssets, releaseURL: URL) {
+        let win = UpdateProgressWindow()
+        win.onCancel = { [weak self] in
+            UpdateInstaller.shared.cancel()
+            self?.updateProgressWindow = nil
+        }
+        updateProgressWindow = win
+        win.showCentered()
+
+        UpdateInstaller.shared.startUpdate(assets: assets) { [weak self] stage in
+            self?.handleInstallerStage(stage, releaseURL: releaseURL)
+        }
+    }
+
+    private func handleInstallerStage(_ stage: UpdateInstaller.Stage, releaseURL: URL) {
+        switch stage {
+        case .downloading(let received, let total):
+            updateProgressWindow?.setDownloading(received: received, total: total)
+        case .extracting:
+            updateProgressWindow?.setExtracting()
+        case .readyToRelaunch(let stagedAppPath):
+            updateProgressWindow?.close()
+            updateProgressWindow = nil
+            confirmRelaunch(stagedAppPath: stagedAppPath, releaseURL: releaseURL)
+        case .failed(let msg):
+            updateProgressWindow?.close()
+            updateProgressWindow = nil
+            showAutoUpdateFailure(msg, releaseURL: releaseURL)
+        }
+    }
+
+    private func confirmRelaunch(stagedAppPath: String, releaseURL: URL) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "新版本已下载完成"
+        alert.informativeText = "立即重启更新到新版本？"
+        alert.alertStyle = .informational
+        alert.addButton(withTitle: "立即重启")
+        alert.addButton(withTitle: "稍后手动启动")
+        let response = alert.runModal()
+        guard response == .alertFirstButtonReturn else {
+            // 把 staged app 路径告知用户，让他自己手动接管
+            let info = NSAlert()
+            info.messageText = "新版本已下载到："
+            info.informativeText = stagedAppPath
+            info.addButton(withTitle: "好")
+            info.runModal()
+            return
+        }
+        switch UpdateInstaller.shared.relaunch(stagedAppPath: stagedAppPath) {
+        case .success:
+            NSApp.terminate(nil)
+        case .failure(let err):
+            showAutoUpdateFailure("重启更新失败: \(err.localizedDescription)\n\n新版本已下载到：\(stagedAppPath)",
+                                  releaseURL: releaseURL)
+        }
+    }
+
+    private func showAutoUpdateFailure(_ message: String, releaseURL: URL) {
+        NSApp.activate(ignoringOtherApps: true)
+        let alert = NSAlert()
+        alert.messageText = "自动更新失败"
+        alert.informativeText = message
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "查看 Release")
+        alert.addButton(withTitle: "关闭")
+        if alert.runModal() == .alertFirstButtonReturn {
+            NSWorkspace.shared.open(releaseURL)
+        }
+    }
+
     @objc private func handleUpdateAvailable(_ note: Notification) {
         guard let outcome = note.object as? UpdateChecker.Outcome,
-              case .newer(_, let latest, _) = outcome else { return }
+              case .newer(_, let latest, _, _) = outcome else { return }
         applyUpdateAvailable(latestVersion: latest)
     }
 

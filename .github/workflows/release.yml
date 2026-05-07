@@ -17,6 +17,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # 完整 git 历史，给后续步骤用 git rev-list 计算构建号
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -32,28 +35,57 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Build DMG
+      - name: Sync Info.plist version from tag
+        if: startsWith(github.ref, 'refs/tags/')
+        run: |
+          set -euo pipefail
+          # 'vX.Y.Z' → 'X.Y.Z'
+          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          # 单调递增的构建号；commit 总数从远古到 HEAD
+          BUILD_NUM="$(git rev-list --count HEAD)"
+          PLIST="Resources/Info.plist"
+
+          CUR_SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+          CUR_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
+          echo "Tag           : $GITHUB_REF_NAME (→ $TAG_VERSION)"
+          echo "Info.plist 旧 : short=$CUR_SHORT build=$CUR_BUILD"
+          echo "Info.plist 新 : short=$TAG_VERSION build=$BUILD_NUM"
+
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $TAG_VERSION" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUM" "$PLIST"
+
+          # 验证
+          NEW_SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
+          NEW_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
+          [[ "$NEW_SHORT" == "$TAG_VERSION" ]] || { echo "短版本号同步失败"; exit 1; }
+          [[ "$NEW_BUILD" == "$BUILD_NUM" ]]  || { echo "构建号同步失败"; exit 1; }
+
+      - name: Build DMG and ZIP
         run: |
           chmod +x build_dmg.sh
           ./build_dmg.sh
 
-      - name: Verify artifact
+      - name: Verify artifacts
         run: |
-          ls -lh Snap2.dmg
-          shasum -a 256 Snap2.dmg
+          ls -lh Snap2.dmg Snap2.zip
+          shasum -a 256 Snap2.dmg Snap2.zip
 
-      - name: Upload DMG to Release
+      - name: Upload DMG + ZIP to Release
         if: startsWith(github.ref, 'refs/tags/')
         uses: softprops/action-gh-release@v2
         with:
-          files: Snap2.dmg
+          files: |
+            Snap2.dmg
+            Snap2.zip
           name: ${{ github.ref_name }}
           generate_release_notes: true
           fail_on_unmatched_files: true
 
-      - name: Upload DMG as workflow artifact (manual runs)
+      - name: Upload artifacts (manual runs)
         if: github.event_name == 'workflow_dispatch'
         uses: actions/upload-artifact@v4
         with:
-          name: Snap2-dmg
-          path: Snap2.dmg
+          name: Snap2-build
+          path: |
+            Snap2.dmg
+            Snap2.zip

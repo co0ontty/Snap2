@@ -12,8 +12,8 @@ set -euo pipefail
 APP_NAME="Snap2"
 DISPLAY_NAME="Snap²"
 BUNDLE_ID="com.chuer.snap2"
-VERSION="1.0.0"
 DMG_NAME="${APP_NAME}.dmg"
+ZIP_NAME="${APP_NAME}.zip"
 DMG_VOLUME_NAME="${DISPLAY_NAME}"
 APP_BUNDLE="${APP_NAME}.app"
 BUILD_DIR="build_output"
@@ -22,7 +22,16 @@ ICON_SET_DIR="${SCRIPT_DIR}/build_tmp/${APP_NAME}.iconset"
 DMG_TEMP="${SCRIPT_DIR}/build_tmp/dmg_staging"
 DMG_RW="${SCRIPT_DIR}/build_tmp/rw.dmg"
 
+# 可选：Developer ID 签名身份。设置后走"Developer ID + 公证"路径，否则 ad-hoc。
+# 例: export DEV_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
+DEV_ID_APPLICATION="${DEV_ID_APPLICATION:-}"
+# 可选：notarytool keychain profile（由 `xcrun notarytool store-credentials` 一次性创建）
+NOTARY_PROFILE="${NOTARY_PROFILE:-}"
+
 cd "$SCRIPT_DIR"
+
+# 版本号取自 Info.plist，避免与脚本常量两处维护漂移
+VERSION="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' Resources/Info.plist 2>/dev/null || echo '0.0.0')"
 
 # ──────────────── 环境检查 ────────────────
 check_environment() {
@@ -119,10 +128,31 @@ create_app_bundle() {
     fi
 
     # 5. 签名
-    echo "  签名 App Bundle..."
-    codesign --force --deep --sign - \
-        --entitlements "Resources/${APP_NAME}.entitlements" \
-        "${APP_BUNDLE}" 2>/dev/null || echo "  警告: 签名失败 (ad-hoc)，应用仍可本地运行"
+    if [ -n "${DEV_ID_APPLICATION}" ]; then
+        echo "  签名 App Bundle (Developer ID + Hardened Runtime)..."
+        # 内层二进制先签，再签 .app
+        find "${APP_BUNDLE}/Contents" -type f \( -perm -u+x -o -name "*.dylib" \) \
+            -not -path "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}" -print0 \
+            | xargs -0 -I {} codesign --force --options runtime --timestamp \
+                --sign "${DEV_ID_APPLICATION}" \
+                --entitlements "Resources/${APP_NAME}.entitlements" \
+                "{}" 2>/dev/null || true
+        codesign --force --options runtime --timestamp \
+            --sign "${DEV_ID_APPLICATION}" \
+            --entitlements "Resources/${APP_NAME}.entitlements" \
+            "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
+        codesign --force --options runtime --timestamp \
+            --sign "${DEV_ID_APPLICATION}" \
+            --entitlements "Resources/${APP_NAME}.entitlements" \
+            "${APP_BUNDLE}"
+        echo "  验证签名..."
+        codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
+    else
+        echo "  签名 App Bundle (ad-hoc)..."
+        codesign --force --deep --sign - \
+            --entitlements "Resources/${APP_NAME}.entitlements" \
+            "${APP_BUNDLE}" 2>/dev/null || echo "  警告: 签名失败 (ad-hoc)，应用仍可本地运行"
+    fi
 
     # 6. 验证 Bundle 结构
     echo "  验证 Bundle 结构..."
@@ -141,6 +171,31 @@ create_app_bundle() {
     app_size=$(du -sh "${APP_BUNDLE}" | cut -f1)
     echo "  App 大小: ${app_size}"
     echo ""
+}
+
+# ──────────────── 打 ZIP（用于自动更新通道）────────────────
+create_zip() {
+    echo "=== 创建 ZIP 自动更新包 ==="
+    rm -f "${ZIP_NAME}"
+    /usr/bin/ditto -c -k --keepParent "${APP_BUNDLE}" "${ZIP_NAME}"
+    local zip_size
+    zip_size=$(du -sh "${ZIP_NAME}" | cut -f1)
+    echo "  ZIP 大小: ${zip_size}"
+    echo ""
+}
+
+# ──────────────── 公证（仅 Developer ID 路径）────────────────
+notarize_artifact() {
+    local artifact="$1"
+    if [ -z "${DEV_ID_APPLICATION}" ] || [ -z "${NOTARY_PROFILE}" ]; then
+        return 0
+    fi
+    echo "  公证 ${artifact}..."
+    xcrun notarytool submit "${artifact}" \
+        --keychain-profile "${NOTARY_PROFILE}" \
+        --wait
+    echo "  staple ${artifact}..."
+    xcrun stapler staple "${artifact}"
 }
 
 # ──────────────── 创建美化 DMG ────────────────
@@ -275,18 +330,25 @@ print_result() {
     echo ""
     echo "  产物:"
     echo "    ${SCRIPT_DIR}/${APP_BUNDLE}"
-    echo "    ${SCRIPT_DIR}/${DMG_NAME}"
+    echo "    ${SCRIPT_DIR}/${DMG_NAME}     (首次手动安装)"
+    echo "    ${SCRIPT_DIR}/${ZIP_NAME}     (内置自动更新通道)"
+    echo ""
+    echo "  Release 上传两个产物：DMG 给首装用户，ZIP 给自动更新流程。"
     echo ""
     echo "  安装方式:"
     echo "    1. 双击 ${DMG_NAME}"
     echo "    2. 将 ${APP_NAME}.app 拖入 Applications 文件夹"
     echo "    3. 从 Launchpad 或 Applications 启动 ${APP_NAME}"
     echo ""
-    echo "  首次运行注意:"
-    echo "    - 系统会提示「无法验证开发者」→ 右键打开 或"
-    echo "      系统设置 > 隐私与安全性 > 点击「仍要打开」"
-    echo "    - 需要在 系统设置 > 隐私与安全性 > 屏幕录制"
-    echo "      中授权 ${APP_NAME} 才能正常截图"
+    if [ -z "${DEV_ID_APPLICATION}" ]; then
+        echo "  首次运行注意 (ad-hoc 签名):"
+        echo "    - 系统会提示「无法验证开发者」"
+        echo "    - macOS 15+ 必须走「系统设置 > 隐私与安全性 > 仍要打开」"
+        echo "    - 屏幕录制权限：系统设置 > 隐私与安全性 > 屏幕录制"
+        echo "    - 升级版本后屏幕录制权限会被重置（ad-hoc 签名局限，需 Developer ID 才能根治）"
+    else
+        echo "  Developer ID 签名 + 公证已启用，首次运行无需特殊操作。"
+    fi
     echo ""
     echo "  快捷键: Ctrl+Shift+A (可在设置中自定义)"
     echo "============================================"
@@ -306,7 +368,10 @@ main() {
     build_project
     generate_icon
     create_app_bundle
+    create_zip
+    notarize_artifact "${APP_BUNDLE}"
     create_dmg
+    notarize_artifact "${DMG_NAME}"
     cleanup
     print_result
 }

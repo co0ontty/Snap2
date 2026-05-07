@@ -1,8 +1,13 @@
 import AppKit
 
 /// 钉图底边下方的隐藏工具栏。
-/// 常态完全藏在钉图背后；鼠标悬停钉图时向下滑出，离开钉图和工具栏后收回。
+/// 常态吸附在钉图下边框中间露出 peekHeight 高度作为视觉提示；
+/// 鼠标悬停钉图时向下滑出，离开钉图和工具栏后收回到 peek 位置。
 final class PinHoverToolbar {
+
+    /// 隐藏态吸附在钉图下边框露出的高度。
+    /// 完全归零会让用户找不到工具栏；3px 在 cornerRadius=14 下能显出一条玻璃边。
+    private static let peekHeight: CGFloat = 3
 
     private weak var owner: PinnedImageWindow?
     private let panel: GlassPanel
@@ -23,7 +28,8 @@ final class PinHoverToolbar {
                                 level: owner.level)
         self.toolbarView = PinHoverToolbarView(frame: NSRect(origin: .zero, size: size))
 
-        panel.alphaValue = 0
+        // peek 态需要可见，alpha 必须保持 1；hover 进出只动位移不动透明度
+        panel.alphaValue = 1
         panel.ignoresMouseEvents = true
 
         toolbarView.translatesAutoresizingMaskIntoConstraints = false
@@ -41,7 +47,7 @@ final class PinHoverToolbar {
         toolbarView.onClose = { [weak self] in self?.owner?.closeFromHoverToolbar() }
 
         owner.addChildWindow(panel, ordered: .below)
-        moveToHiddenPosition()
+        moveToPeekPosition()
 
         NotificationCenter.default.addObserver(
             self,
@@ -71,7 +77,7 @@ final class PinHoverToolbar {
         cancelScheduledHide()
         isPointerInPin = false
         isPointerInToolbar = false
-        hide(animated: false)
+        hideFully()
     }
 
     func detach() {
@@ -98,7 +104,7 @@ final class PinHoverToolbar {
         let item = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
             guard !self.isPointerInPin, !self.isPointerInToolbar else { return }
-            self.hide(animated: true)
+            self.hideToPeek(animated: true)
         }
         hideWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.12, execute: item)
@@ -113,47 +119,48 @@ final class PinHoverToolbar {
         guard let owner = owner else { return }
         attachBelowOwnerIfNeeded(owner)
 
-        let hidden = hiddenOrigin()
         let shown = shownOrigin()
-        if !isShown {
-            panel.setFrameOrigin(hidden)
-            panel.alphaValue = 0
-        }
         isShown = true
         panel.ignoresMouseEvents = false
+        panel.alphaValue = 1
 
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.20
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.16, 1.0, 0.3, 1.0)
-            panel.animator().alphaValue = 1.0
             panel.animator().setFrameOrigin(shown)
         }
     }
 
-    private func hide(animated: Bool) {
-        let hidden = hiddenOrigin()
+    /// hover 离开后回到 peek 态：保持 alpha=1，仅位移。
+    private func hideToPeek(animated: Bool) {
+        let peek = peekOrigin()
         isShown = false
+        panel.ignoresMouseEvents = true
+        panel.alphaValue = 1
 
         guard animated else {
-            panel.alphaValue = 0
-            panel.setFrameOrigin(hidden)
-            panel.ignoresMouseEvents = true
+            panel.setFrameOrigin(peek)
             return
         }
 
-        NSAnimationContext.runAnimationGroup({ ctx in
+        NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
             ctx.timingFunction = CAMediaTimingFunction(controlPoints: 0.4, 0.0, 0.2, 1.0)
-            panel.animator().alphaValue = 0
-            panel.animator().setFrameOrigin(hidden)
-        }, completionHandler: { [weak self] in
-            guard let self = self, !self.isShown else { return }
-            self.panel.ignoresMouseEvents = true
-        })
+            panel.animator().setFrameOrigin(peek)
+        }
     }
 
-    private func moveToHiddenPosition() {
-        panel.setFrameOrigin(hiddenOrigin())
+    /// 进入编辑、关闭钉图等场景：完全消失（alpha=0 + 完全藏到 owner 背后）。
+    private func hideFully() {
+        cancelScheduledHide()
+        isShown = false
+        panel.ignoresMouseEvents = true
+        panel.alphaValue = 0
+        panel.setFrameOrigin(fullyHiddenOrigin())
+    }
+
+    private func moveToPeekPosition() {
+        panel.setFrameOrigin(peekOrigin())
     }
 
     private func attachBelowOwnerIfNeeded(_ owner: PinnedImageWindow) {
@@ -168,12 +175,19 @@ final class PinHoverToolbar {
     @objc private func ownerWindowDidMove(_ notification: Notification) {
         if isShown {
             panel.setFrameOrigin(shownOrigin())
-        } else {
-            moveToHiddenPosition()
+        } else if panel.alphaValue > 0 {
+            moveToPeekPosition()
         }
     }
 
-    private func hiddenOrigin() -> NSPoint {
+    /// peek 态：panel 顶部 peekHeight 高度露在 owner 下边框之外，其余被 owner 遮住。
+    private func peekOrigin() -> NSPoint {
+        guard let owner = owner else { return .zero }
+        return NSPoint(x: targetX(), y: owner.frame.minY - Self.peekHeight)
+    }
+
+    /// 完全藏起：panel 与 owner 底边完全重叠，z-order=.below 使其不可见。
+    private func fullyHiddenOrigin() -> NSPoint {
         guard let owner = owner else { return .zero }
         return NSPoint(x: targetX(), y: owner.frame.minY)
     }
