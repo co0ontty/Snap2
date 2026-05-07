@@ -1,5 +1,6 @@
 import AppKit
 import CoreGraphics
+import CoreVideo
 import ScreenCaptureKit
 
 /// 屏幕截图管理器（单例）
@@ -70,6 +71,10 @@ final class CaptureManager {
             config.height = Int(frameSize.height * scale)
             config.scalesToFit = false
             config.showsCursor = false
+            // 显式保留广色域：默认值在不同 macOS 版本/显示器上不一致，
+            // 不指定时部分机型会回落到 sRGB，导致 P3 屏幕上的饱和色变暗变灰。
+            config.colorSpaceName = CGColorSpace.displayP3
+            config.pixelFormat = kCVPixelFormatType_32BGRA
 
             let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
             return NSImage(cgImage: cgImage, size: frameSize)
@@ -166,6 +171,9 @@ final class CaptureManager {
                 config.height = Int(captureRect.height * backingScale)
                 config.scalesToFit = false
                 config.showsCursor = false
+                // 与全屏冻结路径保持一致，强制广色域+BGRA，避免颜色失真
+                config.colorSpaceName = CGColorSpace.displayP3
+                config.pixelFormat = kCVPixelFormatType_32BGRA
 
                 let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
                 // NSImage 非 Sendable，在 MainActor 内构造避免跨 actor 边界传递。

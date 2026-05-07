@@ -517,22 +517,23 @@ final class SelectionView: NSView {
         let scaleX = pixelW / image.size.width
         let scaleY = pixelH / image.size.height
 
-        // CGImage 使用左上为原点的像素坐标；SelectionView 使用左下为原点的点坐标。
-        let raw = CGRect(
-            x: rect.minX * scaleX,
-            y: pixelH - rect.maxY * scaleY,
-            width: rect.width * scaleX,
-            height: rect.height * scaleY
-        )
-        let minX = max(0, floor(raw.minX))
-        let minY = max(0, floor(raw.minY))
-        let maxX = min(pixelW, ceil(raw.maxX))
-        let maxY = min(pixelH, ceil(raw.maxY))
-        let cropRect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        // 用 round 而不是 floor/ceil，避免 cropped 像素尺寸与 NSImage.size 的比例
+        // 偏离 backingScale，从而让 renderFinalImage 中的 1:1 像素绘制出现非整数缩放
+        // 而看起来"模糊"。
+        let originX = max(0, round(rect.minX * scaleX))
+        let originY = max(0, round((image.size.height - rect.maxY) * scaleY))
+        let widthPx = round(rect.width * scaleX)
+        let heightPx = round(rect.height * scaleY)
+        let clampedW = min(widthPx, pixelW - originX)
+        let clampedH = min(heightPx, pixelH - originY)
+        guard clampedW > 0, clampedH > 0 else { return nil }
+        let cropRect = CGRect(x: originX, y: originY, width: clampedW, height: clampedH)
 
-        guard cropRect.width > 0, cropRect.height > 0,
-              let cropped = cgImage.cropping(to: cropRect) else { return nil }
-        return NSImage(cgImage: cropped, size: rect.size)
+        guard let cropped = cgImage.cropping(to: cropRect) else { return nil }
+        // 让返回 NSImage 的 size 严格匹配 cropped 像素尺寸 / backing scale，
+        // 保证后续 renderFinalImage 里 pointSize 与 pixelSize 的比例恒等于 scale。
+        let pointSize = NSSize(width: clampedW / scaleX, height: clampedH / scaleY)
+        return NSImage(cgImage: cropped, size: pointSize)
     }
 
     // MARK: - 标注鼠标
@@ -857,38 +858,56 @@ final class SelectionView: NSView {
         }
         guard pixelW > 0, pixelH > 0 else { return NSImage() }
 
-        guard let outRep = NSBitmapImageRep(
-            bitmapDataPlanes: nil,
-            pixelsWide: pixelW, pixelsHigh: pixelH,
-            bitsPerSample: 8, samplesPerPixel: 4,
-            hasAlpha: true, isPlanar: false,
-            colorSpaceName: .deviceRGB,
-            bytesPerRow: 0, bitsPerPixel: 32
+        // 用 Display P3 而非 deviceRGB：SCK 抓到的 CGImage 多为 P3，
+        // 落到 deviceRGB 的位图会按 sRGB 解释 P3 像素，导致饱和色偏暗变灰。
+        let colorSpace = bgCG?.colorSpace ?? CGColorSpace(name: CGColorSpace.displayP3) ?? CGColorSpaceCreateDeviceRGB()
+        let bitmapInfo: UInt32 = CGImageAlphaInfo.premultipliedLast.rawValue | CGBitmapInfo.byteOrder32Big.rawValue
+        guard let cgContext = CGContext(
+            data: nil,
+            width: pixelW,
+            height: pixelH,
+            bitsPerComponent: 8,
+            bytesPerRow: 0,
+            space: colorSpace,
+            bitmapInfo: bitmapInfo
         ) else { return NSImage() }
-        outRep.size = pointSize
 
-        NSGraphicsContext.saveGraphicsState()
-        defer { NSGraphicsContext.restoreGraphicsState() }
-        guard let graphicsContext = NSGraphicsContext(bitmapImageRep: outRep) else { return NSImage() }
-        NSGraphicsContext.current = graphicsContext
-        graphicsContext.cgContext.interpolationQuality = .none
-
+        // 切到像素坐标系：(0,0,pixelW,pixelH) 直接对应输出位图的像素网格，
+        // 背景 CGImage 绘制走 1:1，无任何重采样。
         if let cg = bgCG {
-            let bgRep = NSBitmapImageRep(cgImage: cg)
-            bgRep.size = pointSize
-            bgRep.draw(in: NSRect(origin: .zero, size: pointSize))
+            cgContext.interpolationQuality = .none
+            cgContext.draw(cg, in: CGRect(x: 0, y: 0, width: pixelW, height: pixelH))
         } else {
-            bg.draw(in: NSRect(origin: .zero, size: pointSize),
+            // 兜底：通过 NSGraphicsContext 让 NSImage 自己绘制，保留高质量插值
+            let nsCtx = NSGraphicsContext(cgContext: cgContext, flipped: false)
+            NSGraphicsContext.saveGraphicsState()
+            NSGraphicsContext.current = nsCtx
+            bg.draw(in: NSRect(x: 0, y: 0, width: pixelW, height: pixelH),
                     from: .zero,
-                    operation: .sourceOver,
+                    operation: .copy,
                     fraction: 1.0,
                     respectFlipped: false,
-                    hints: [.interpolation: NSImageInterpolation.none])
-        }
-        for el in elements {
-            toolRegistry.tool(for: el.toolType)?.draw(element: el, in: graphicsContext.cgContext)
+                    hints: [.interpolation: NSImageInterpolation.high])
+            NSGraphicsContext.restoreGraphicsState()
         }
 
+        // 标注是按"点"坐标记录的，绘制时需缩放到像素空间。
+        // 用高质量插值 + 缩放变换，让箭头/线条在 Retina 上保持锐利不锯齿。
+        let scaleX = CGFloat(pixelW) / pointSize.width
+        let scaleY = CGFloat(pixelH) / pointSize.height
+        cgContext.saveGState()
+        cgContext.scaleBy(x: scaleX, y: scaleY)
+        cgContext.interpolationQuality = .high
+        cgContext.setShouldAntialias(true)
+        cgContext.setAllowsAntialiasing(true)
+        for el in elements {
+            toolRegistry.tool(for: el.toolType)?.draw(element: el, in: cgContext)
+        }
+        cgContext.restoreGState()
+
+        guard let outCG = cgContext.makeImage() else { return NSImage() }
+        let outRep = NSBitmapImageRep(cgImage: outCG)
+        outRep.size = pointSize
         let result = NSImage(size: pointSize)
         result.addRepresentation(outRep)
         return result
