@@ -47,10 +47,15 @@ final class CaptureManager {
     /// 捕获指定屏幕的整屏画面，用于"冻结"桌面。
     /// 调用方负责在主 actor 收集 overlay 的 windowNumber。
     private func captureFullScreen(screen: NSScreen, excludingWindowIDs overlayWindowIDs: [CGWindowID]) async -> NSImage? {
+        // NSScreen 非 Sendable，await 后跨 actor 边界使用会触发严格并发错误。
+        // 在 await 前把需要的标量提出来，闭包/await 之后只引用值类型。
+        let screenDisplayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        let scale = screen.backingScaleFactor
+        let frameSize = screen.frame.size
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let scDisplay = content.displays.first(where: { display in
-                display.displayID == screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+                display.displayID == screenDisplayID
             }) ?? content.displays.first else { return nil }
 
             let selfBundleID = Bundle.main.bundleIdentifier ?? AppInfo.bundleID
@@ -61,14 +66,13 @@ final class CaptureManager {
             let filter = SCContentFilter(display: scDisplay, excludingWindows: excludeWindows)
 
             let config = SCStreamConfiguration()
-            let scale = screen.backingScaleFactor
-            config.width = Int(screen.frame.width * scale)
-            config.height = Int(screen.frame.height * scale)
+            config.width = Int(frameSize.width * scale)
+            config.height = Int(frameSize.height * scale)
             config.scalesToFit = false
             config.showsCursor = false
 
             let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            return NSImage(cgImage: cgImage, size: screen.frame.size)
+            return NSImage(cgImage: cgImage, size: frameSize)
         } catch {
             NSLog("[CaptureManager] 全屏冻结失败: \(error.localizedDescription)")
             return nil
@@ -132,12 +136,16 @@ final class CaptureManager {
             height: rect.height
         )
 
+        // NSScreen 非 Sendable，先取出需要的标量再进 Task
+        let screenDisplayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+        let backingScale = screen.backingScaleFactor
+
         Task {
             do {
                 let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
 
                 guard let scDisplay = content.displays.first(where: { display in
-                    display.displayID == screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+                    display.displayID == screenDisplayID
                 }) ?? content.displays.first else {
                     await MainActor.run { completion(nil) }
                     return
@@ -154,8 +162,8 @@ final class CaptureManager {
 
                 let config = SCStreamConfiguration()
                 config.sourceRect = captureRect
-                config.width = Int(captureRect.width * screen.backingScaleFactor)
-                config.height = Int(captureRect.height * screen.backingScaleFactor)
+                config.width = Int(captureRect.width * backingScale)
+                config.height = Int(captureRect.height * backingScale)
                 config.scalesToFit = false
                 config.showsCursor = false
 
