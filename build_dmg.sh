@@ -72,12 +72,13 @@ clean_previous() {
 build_project() {
     echo "=== 编译项目 (Release) ==="
     mkdir -p "${BUILD_DIR}"
+    # 不再 tail 截断 stderr，否则 CI 上失败时根因被吞
     swiftc -o "${BUILD_DIR}/${APP_NAME}" \
         -target arm64-apple-macosx14.0 \
         -sdk "$(xcrun --show-sdk-path)" \
         -swift-version 5 \
         -O \
-        $(find Sources -name "*.swift") 2>&1 | tail -5
+        $(find Sources -name "*.swift")
     echo "  二进制文件: ${BUILD_DIR}/${APP_NAME}"
     echo ""
 }
