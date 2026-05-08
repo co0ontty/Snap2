@@ -21,8 +21,15 @@ final class SelectionView: NSView {
 
     // 标注
     private var capturedImage: NSImage?
+    /// capturedImage 对应的原始像素 CGImage，单独持有用于像素级操作。
+    /// 不再走 NSImage.cgImage(forProposedRect:) round-trip——那条路径在某些机型/版本上
+    /// 会把高分图按 proposedRect（点尺寸）重采样回点级分辨率，导致输出"分辨率特别低"
+    /// 且伴随插值模糊的"抖动"感。
+    private var capturedCGImage: CGImage?
     /// 截图触发瞬间冻结的整屏画面；选区背景从这里取，避免动态内容被划过去
     private var frozenImage: NSImage?
+    /// frozenImage 对应的原始像素 CGImage，理由同 capturedCGImage
+    private var frozenCGImage: CGImage?
     private var elements: [AnnotationElement] = []
     private var currentElement: AnnotationElement?
     private var undoStack: [[AnnotationElement]] = []
@@ -113,16 +120,20 @@ final class SelectionView: NSView {
         }
     }
 
-    /// 由 CaptureManager 在异步冻结完成后调用
-    func setFrozenImage(_ image: NSImage) {
-        frozenImage = image
+    /// 由 CaptureManager 在异步冻结完成后调用。
+    /// 同时持有 NSImage（供 draw_in 直接绘制）和 CGImage（供后续像素级 crop）。
+    func setFrozenSnapshot(cgImage: CGImage, pointSize: NSSize) {
+        frozenCGImage = cgImage
+        frozenImage = NSImage(cgImage: cgImage, size: pointSize)
         needsDisplay = true
     }
 
     /// 钉图"重新标注"入口：直接进入 annotating，跳过选区阶段。
-    /// 调用方负责把钉图屏幕坐标换算为本视图局部坐标。
-    func startPinEdit(image: NSImage, selectionInView rect: NSRect) {
+    /// 调用方负责把钉图屏幕坐标换算为本视图局部坐标，并尽量把原始 CGImage 一并提供，
+    /// 这样 renderFinalImage 能跳过 NSImage round-trip 保住高分输出。
+    func startPinEdit(image: NSImage, cgImage: CGImage?, selectionInView rect: NSRect) {
         capturedImage = image
+        capturedCGImage = cgImage
         selectionRect = rect
         mode = .annotating
         showAnnotationToolbar()
@@ -469,9 +480,11 @@ final class SelectionView: NSView {
         hideSizeBadge()
 
         // 优先从冻结画面裁剪——和用户实际看到的选区一致，且无需再调一次 SCK
-        if let frozen = frozenImage,
-           let cropped = cropFrozenImage(frozen, to: selectionRect) {
-            self.capturedImage = cropped
+        if let frozenCG = frozenCGImage,
+           let frozenSize = frozenImage?.size,
+           let cropped = cropFrozenCGImage(frozenCG, frozenPointSize: frozenSize, to: selectionRect) {
+            self.capturedCGImage = cropped.cgImage
+            self.capturedImage = NSImage(cgImage: cropped.cgImage, size: cropped.pointSize)
             self.mode = .annotating
             self.showAnnotationToolbar()
             self.needsDisplay = true
@@ -488,13 +501,14 @@ final class SelectionView: NSView {
             width: selectionRect.width,
             height: selectionRect.height
         )
-        CaptureManager.shared.captureInline(rect: captureRect, screen: screen) { [weak self] image in
+        CaptureManager.shared.captureInline(rect: captureRect, screen: screen) { [weak self] cgImage, pointSize in
             guard let self = self else { return }
-            guard let image = image else {
+            guard let cgImage = cgImage else {
                 CaptureManager.shared.cancelCapture()
                 return
             }
-            self.capturedImage = image
+            self.capturedCGImage = cgImage
+            self.capturedImage = NSImage(cgImage: cgImage, size: pointSize)
             self.mode = .annotating
             self.showAnnotationToolbar()
             self.needsDisplay = true
@@ -503,26 +517,22 @@ final class SelectionView: NSView {
         }
     }
 
-    /// 把冻结的整屏画面按选区（视图坐标，y 朝上）裁出 NSImage。
+    /// 把冻结的整屏画面按选区（视图坐标，y 朝上）裁出 CGImage。
     /// CGImage 走的是顶向下坐标系，需要做 Y 翻转换算。
-    private func cropFrozenImage(_ image: NSImage, to rect: NSRect) -> NSImage? {
-        var proposed = NSRect(origin: .zero, size: image.size)
-        guard let cgImage = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil) else {
-            return nil
-        }
-
+    /// 直接对 CGImage 操作，绕开 NSImage.cgImage(forProposedRect:) 的有损 round-trip。
+    private func cropFrozenCGImage(_ cgImage: CGImage, frozenPointSize: NSSize, to rect: NSRect) -> (cgImage: CGImage, pointSize: NSSize)? {
         let pixelW = CGFloat(cgImage.width)
         let pixelH = CGFloat(cgImage.height)
-        guard image.size.width > 0, image.size.height > 0,
+        guard frozenPointSize.width > 0, frozenPointSize.height > 0,
               rect.width > 0, rect.height > 0 else { return nil }
-        let scaleX = pixelW / image.size.width
-        let scaleY = pixelH / image.size.height
+        let scaleX = pixelW / frozenPointSize.width
+        let scaleY = pixelH / frozenPointSize.height
 
         // 用 round 而不是 floor/ceil，避免 cropped 像素尺寸与 NSImage.size 的比例
         // 偏离 backingScale，从而让 renderFinalImage 中的 1:1 像素绘制出现非整数缩放
         // 而看起来"模糊"。
         let originX = max(0, round(rect.minX * scaleX))
-        let originY = max(0, round((image.size.height - rect.maxY) * scaleY))
+        let originY = max(0, round((frozenPointSize.height - rect.maxY) * scaleY))
         let widthPx = round(rect.width * scaleX)
         let heightPx = round(rect.height * scaleY)
         let clampedW = min(widthPx, pixelW - originX)
@@ -531,10 +541,10 @@ final class SelectionView: NSView {
         let cropRect = CGRect(x: originX, y: originY, width: clampedW, height: clampedH)
 
         guard let cropped = cgImage.cropping(to: cropRect) else { return nil }
-        // 让返回 NSImage 的 size 严格匹配 cropped 像素尺寸 / backing scale，
-        // 保证后续 renderFinalImage 里 pointSize 与 pixelSize 的比例恒等于 scale。
+        // pointSize 严格 = 像素 / scale，保证后续 renderFinalImage 里 pixel:point 比例
+        // 恒等于 backing scale。
         let pointSize = NSSize(width: clampedW / scaleX, height: clampedH / scaleY)
-        return NSImage(cgImage: cropped, size: pointSize)
+        return (cropped, pointSize)
     }
 
     // MARK: - 标注鼠标
@@ -860,13 +870,20 @@ final class SelectionView: NSView {
     private func renderFinalImage() -> NSImage {
         guard let bg = capturedImage else { return NSImage() }
 
-        // 逻辑尺寸来自 NSImage.size（点），像素尺寸来自原始 CGImage / rep。
-        // 最终结果始终保留 backing scale：例如 200pt @2x 输出 400px。
+        // 逻辑尺寸来自 NSImage.size（点），像素尺寸**优先**取直接持有的 CGImage（避免
+        // NSImage.cgImage(forProposedRect:) 在某些机型/版本上把高分图重采样回点级分辨率
+        // ——那是症状"分辨率特别低 + 抖动模糊"的根因）。
         let pointSize = bg.size
         guard pointSize.width > 0, pointSize.height > 0 else { return NSImage() }
 
-        var proposed = NSRect(origin: .zero, size: pointSize)
-        let bgCG = bg.cgImage(forProposedRect: &proposed, context: nil, hints: nil)
+        let bgCG: CGImage?
+        if let direct = capturedCGImage {
+            bgCG = direct
+        } else {
+            var proposed = NSRect(origin: .zero, size: pointSize)
+            bgCG = bg.cgImage(forProposedRect: &proposed, context: nil, hints: nil)
+        }
+
         let pixelW: Int
         let pixelH: Int
         if let cg = bgCG {

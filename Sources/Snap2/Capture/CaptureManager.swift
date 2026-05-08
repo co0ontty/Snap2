@@ -31,15 +31,15 @@ final class CaptureManager {
         overlayWindows.first?.makeKey()
 
         // 异步冻结每屏当前画面：覆盖层先以暗色蒙版示人，
-        // 拿到全屏快照后再 setFrozenImage 让选区下方变成"凝固"的桌面，
+        // 拿到全屏快照后再 setFrozenSnapshot 让选区下方变成"凝固"的桌面，
         // 避免用户慢慢框选时动态内容（视频/动画）已被划过去。
         let snapshot = overlayWindows
         let overlayWindowIDs = overlayWindows.map { CGWindowID($0.windowNumber) }
         Task { @MainActor in
             for overlay in snapshot {
                 let screen = overlay.targetScreen
-                if let image = await self.captureFullScreen(screen: screen, excludingWindowIDs: overlayWindowIDs) {
-                    (overlay.contentView as? SelectionView)?.setFrozenImage(image)
+                if let snap = await self.captureFullScreen(screen: screen, excludingWindowIDs: overlayWindowIDs) {
+                    (overlay.contentView as? SelectionView)?.setFrozenSnapshot(cgImage: snap.cgImage, pointSize: snap.pointSize)
                 }
             }
         }
@@ -47,7 +47,9 @@ final class CaptureManager {
 
     /// 捕获指定屏幕的整屏画面，用于"冻结"桌面。
     /// 调用方负责在主 actor 收集 overlay 的 windowNumber。
-    private func captureFullScreen(screen: NSScreen, excludingWindowIDs overlayWindowIDs: [CGWindowID]) async -> NSImage? {
+    /// 返回原始像素 CGImage 与对应的逻辑点尺寸——上层不再走 NSImage round-trip，
+    /// 避免 cgImage(forProposedRect:) 在某些机型/版本上把高分图重采样回点级分辨率。
+    private func captureFullScreen(screen: NSScreen, excludingWindowIDs overlayWindowIDs: [CGWindowID]) async -> (cgImage: CGImage, pointSize: NSSize)? {
         // NSScreen 非 Sendable，await 后跨 actor 边界使用会触发严格并发错误。
         // 在 await 前把需要的标量提出来，闭包/await 之后只引用值类型。
         let screenDisplayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
@@ -77,7 +79,7 @@ final class CaptureManager {
             config.pixelFormat = kCVPixelFormatType_32BGRA
 
             let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            return NSImage(cgImage: cgImage, size: frameSize)
+            return (cgImage, frameSize)
         } catch {
             NSLog("[CaptureManager] 全屏冻结失败: \(error.localizedDescription)")
             return nil
@@ -124,13 +126,22 @@ final class CaptureManager {
             height: pinFrame.height
         )
 
-        // 5. 直接进入 annotating，跳过选区阶段
-        (overlay.contentView as? SelectionView)?.startPinEdit(image: pin.currentImage, selectionInView: local)
+        // 5. 直接进入 annotating，跳过选区阶段。
+        //    优先把原始 CGImage 一并传过去，让 SelectionView 的像素操作走 CGImage 直链；
+        //    NSImage.cgImage(forProposedRect:) 的兜底由 startPinEdit 内部处理。
+        (overlay.contentView as? SelectionView)?.startPinEdit(
+            image: pin.currentImage,
+            cgImage: pin.currentCGImage,
+            selectionInView: local
+        )
     }
 
     // MARK: - 内联截图（不关闭覆盖层，回调图片给 SelectionView）
 
-    func captureInline(rect: NSRect, screen: NSScreen, completion: @escaping (NSImage?) -> Void) {
+    /// 内联截图：把抓到的 CGImage 直接抛回（保留原始像素分辨率），不做 NSImage 包装。
+    /// 上层负责自己持有 CGImage 引用做后续 crop/render，避免 cgImage(forProposedRect:)
+    /// 在某些机型/macOS 版本下把高分图重采样回点级分辨率（症状：分辨率特别低 + 模糊）。
+    func captureInline(rect: NSRect, screen: NSScreen, completion: @escaping (CGImage?, NSSize) -> Void) {
         let overlayWindowIDs = overlayWindows.map { CGWindowID($0.windowNumber) }
 
         let mainScreenHeight = NSScreen.screens.first?.frame.height ?? 0
@@ -144,6 +155,7 @@ final class CaptureManager {
         // NSScreen 非 Sendable，先取出需要的标量再进 Task
         let screenDisplayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
         let backingScale = screen.backingScaleFactor
+        let pointSize = rect.size
 
         Task {
             do {
@@ -152,7 +164,7 @@ final class CaptureManager {
                 guard let scDisplay = content.displays.first(where: { display in
                     display.displayID == screenDisplayID
                 }) ?? content.displays.first else {
-                    await MainActor.run { completion(nil) }
+                    await MainActor.run { completion(nil, pointSize) }
                     return
                 }
 
@@ -176,18 +188,12 @@ final class CaptureManager {
                 config.pixelFormat = kCVPixelFormatType_32BGRA
 
                 let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-                // NSImage 非 Sendable，在 MainActor 内构造避免跨 actor 边界传递。
-                // size 必须是逻辑点尺寸（rect.size）而非像素尺寸，否则 NSImage 会把
-                // 高分辨率 CGImage 当成 1× 来缩放，导致 Retina 屏上的实时预览出现
-                // 插值模糊。用 rect.size 让 NSImage 知道这是个 backing scale 为
-                // (cgImage.width/rect.width) 倍的高分图。
                 await MainActor.run {
-                    let image = NSImage(cgImage: cgImage, size: rect.size)
-                    completion(image)
+                    completion(cgImage, pointSize)
                 }
             } catch {
                 NSLog("[CaptureManager] 截图失败: \(error.localizedDescription)")
-                await MainActor.run { completion(nil) }
+                await MainActor.run { completion(nil, pointSize) }
             }
         }
     }

@@ -17,6 +17,19 @@ final class PinnedImageWindow: NSPanel {
     /// 当前钉图所显示的图片，给"重新标注"流程用
     var currentImage: NSImage { imageView.image ?? NSImage() }
 
+    /// 当前钉图的原始像素 CGImage（保留 backing scale）。
+    /// renderFinalImage 输出走的是 NSBitmapImageRep，这条路径能直接拿到底层 CGImage，
+    /// 无需经 NSImage.cgImage(forProposedRect:) 的有损 round-trip。
+    var currentCGImage: CGImage? {
+        if let bitmap = imageView.image?.representations.first as? NSBitmapImageRep,
+           let cg = bitmap.cgImage {
+            return cg
+        }
+        guard let image = imageView.image else { return nil }
+        var proposed = NSRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &proposed, context: nil, hints: nil)
+    }
+
     /// 在屏幕坐标 origin 处弹出钉图。
     @discardableResult
     static func show(image: NSImage, at screenOrigin: NSPoint) -> PinnedImageWindow {
