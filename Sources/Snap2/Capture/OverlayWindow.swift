@@ -33,6 +33,11 @@ class OverlayWindow: NSWindow {
         hasShadow = false
         backgroundColor = .clear
 
+        // 强制 P3 色彩空间：SCK 抓到的 frozenCGImage 是 Display P3，
+        // 若窗口用默认 sRGB，AppKit 在渲染管线里会把 P3 颜色降格，
+        // 导致截图预览/标注阶段颜色偏暗偏灰。
+        colorSpace = NSColorSpace.displayP3
+
         // 接收鼠标事件
         ignoresMouseEvents = false
         acceptsMouseMovedEvents = true

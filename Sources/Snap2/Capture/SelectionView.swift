@@ -72,6 +72,15 @@ final class SelectionView: NSView {
     }
     required init?(coder: NSCoder) { fatalError() }
 
+    override func makeBackingLayer() -> CALayer {
+        let l = super.makeBackingLayer()
+        // layer 的 backing store 同样设为 P3，与 OverlayWindow.colorSpace 对齐。
+        // CALayer 默认用 device RGB（sRGB），P3 CGImage 经 Core Animation 合成时
+        // 会被 tone-mapped 导致饱和色偏暗；设为 P3 后颜色完整保留。
+        l.colorspace = CGColorSpace(name: CGColorSpace.displayP3)
+        return l
+    }
+
     // MARK: - 绘制
 
     override func draw(_ dirtyRect: NSRect) {
@@ -110,7 +119,16 @@ final class SelectionView: NSView {
         case .selecting:
             drawSelectionChrome(in: context)
         case .annotating:
-            if let image = capturedImage {
+            // 有冻结底图时，选区内容已由 step 1 的 frozenImage.draw(in: bounds) 提供：
+            // frozenImage 按 1:1（image.size == bounds.size）铺满视图，选区对应区域的像素
+            // 原样保留（未被 even-odd 蒙版覆盖），直接在其上叠标注即可。
+            //
+            // 不再用 capturedImage 重画选区背景——capturedImage 经过 crop + round，
+            // 与 selectionRect（浮点拖拽坐标）存在微小 size 差异，NSImage.draw 会做
+            // 轻微缩放 + 双线性插值，正是「松手一瞬间变模糊」的根因。
+            //
+            // 无冻结（editPin / 降级路径）时才用 capturedImage 填充背景。
+            if frozenImage == nil, let image = capturedImage {
                 image.draw(in: selectionRect, from: .zero, operation: .sourceOver, fraction: 1.0)
             }
             drawAnnotations(in: context)
