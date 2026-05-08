@@ -68,15 +68,18 @@ final class UpdateChecker {
 
     @MainActor
     private func persist(_ result: Outcome) {
-        UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: UDKey.lastUpdateCheckAt)
         switch result {
         case .newer(_, let latest, _, _):
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: UDKey.lastUpdateCheckAt)
             UserDefaults.standard.set(latest, forKey: UDKey.lastKnownLatestVersion)
             NotificationCenter.default.post(name: .updateAvailable, object: result)
         case .upToDate:
+            UserDefaults.standard.set(Date().timeIntervalSince1970, forKey: UDKey.lastUpdateCheckAt)
             // 用户已升上来，清掉旧"新版本"角标提示
             UserDefaults.standard.removeObject(forKey: UDKey.lastKnownLatestVersion)
+            NotificationCenter.default.post(name: .updateNotAvailable, object: result)
         case .error:
+            // 不写入 lastUpdateCheckAt：允许下次启动重新尝试，避免一次网络抖动锁死 24h
             break
         }
     }

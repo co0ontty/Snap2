@@ -15,6 +15,10 @@ final class SettingsWindowController: NSWindowController {
     private var sidebarItems: [SidebarItemView] = []
     private var detailContainer: NSView!
 
+    // 侧边栏底部 — 可点击版本号 + 升级胶囊
+    private var versionButton: VersionLinkButton!
+    private var upgradePill: UpgradePillButton!
+
     private enum Tab: Int, CaseIterable {
         case general, hotkey, about
 
@@ -62,11 +66,17 @@ final class SettingsWindowController: NSWindowController {
 
         super.init(window: window)
         buildLayout(size: size)
+        setupUpdateObservers()
+        applyInitialUpdateState()
         select(tab: .general)
     }
 
     @available(*, unavailable)
     required init?(coder: NSCoder) { fatalError() }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self)
+    }
 
     // MARK: - 布局
 
@@ -186,14 +196,20 @@ final class SettingsWindowController: NSWindowController {
             sidebarItems.append(item)
         }
 
-        // 底部版本号
-        let versionLabel = NSTextField(labelWithString: "v\(appVersion())")
-        versionLabel.font = NSFont.systemFont(ofSize: 10)
-        versionLabel.textColor = NSColor.white.withAlphaComponent(0.40)
-        versionLabel.backgroundColor = .clear
-        versionLabel.alignment = .center
-        versionLabel.translatesAutoresizingMaskIntoConstraints = false
-        sidebar.addSubview(versionLabel)
+        // 底部：可点击版本号 + 升级胶囊（默认隐藏）
+        versionButton = VersionLinkButton(text: "v\(appVersion())")
+        versionButton.onClick = { [weak self] in self?.triggerUpdateCheck() }
+
+        upgradePill = UpgradePillButton()
+        upgradePill.isHidden = true
+        upgradePill.onClick = { [weak self] in self?.triggerUpdateCheck() }
+
+        let footer = NSStackView(views: [versionButton, upgradePill])
+        footer.orientation = .horizontal
+        footer.spacing = 6
+        footer.alignment = .centerY
+        footer.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.addSubview(footer)
 
         // —— 详情容器 ——
         detailContainer = NSView()
@@ -220,8 +236,10 @@ final class SettingsWindowController: NSWindowController {
             sidebarStack.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 12),
             sidebarStack.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -12),
 
-            versionLabel.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -14),
-            versionLabel.centerXAnchor.constraint(equalTo: sidebar.centerXAnchor),
+            footer.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -14),
+            footer.centerXAnchor.constraint(equalTo: sidebar.centerXAnchor),
+            footer.leadingAnchor.constraint(greaterThanOrEqualTo: sidebar.leadingAnchor, constant: 12),
+            footer.trailingAnchor.constraint(lessThanOrEqualTo: sidebar.trailingAnchor, constant: -12),
 
             detailContainer.topAnchor.constraint(equalTo: contentView.topAnchor),
             detailContainer.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
@@ -260,6 +278,44 @@ final class SettingsWindowController: NSWindowController {
             v.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor),
             v.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor),
         ])
+    }
+
+    // MARK: - 更新检查 UI 联动
+
+    private func setupUpdateObservers() {
+        let nc = NotificationCenter.default
+        nc.addObserver(self, selector: #selector(handleUpdateAvailable(_:)),
+                       name: .updateAvailable, object: nil)
+        nc.addObserver(self, selector: #selector(handleUpdateNotAvailable(_:)),
+                       name: .updateNotAvailable, object: nil)
+    }
+
+    private func applyInitialUpdateState() {
+        let current = UpdateChecker.shared.currentVersion
+        if let latest = UserDefaults.standard.string(forKey: UDKey.lastKnownLatestVersion),
+           !latest.isEmpty,
+           UpdateChecker.isVersionNewer(latest, than: current) {
+            upgradePill.setLatestVersion(latest)
+            upgradePill.isHidden = false
+        } else {
+            upgradePill.isHidden = true
+        }
+    }
+
+    @objc private func handleUpdateAvailable(_ note: Notification) {
+        guard let outcome = note.object as? UpdateChecker.Outcome,
+              case .newer(_, let latest, _, _) = outcome else { return }
+        upgradePill.setLatestVersion(latest)
+        upgradePill.isHidden = false
+    }
+
+    @objc private func handleUpdateNotAvailable(_ note: Notification) {
+        upgradePill.isHidden = true
+    }
+
+    private func triggerUpdateCheck() {
+        // 把 alert / 安装流程委托给菜单栏控制器统一处理
+        NotificationCenter.default.post(name: .updateCheckRequested, object: nil)
     }
 
     // MARK: - 显示
@@ -408,5 +464,151 @@ final class SidebarItemView: NSView {
             iconView.contentTintColor = NSColor.white.withAlphaComponent(0.78)
         }
         CATransaction.commit()
+    }
+}
+
+// MARK: - 侧边栏底部 — 版本号 / 升级胶囊
+
+/// 版本号样式的可点击 "链接"，hover 时变亮，点击触发 onClick。
+final class VersionLinkButton: NSView {
+
+    var onClick: (() -> Void)?
+
+    private let label = NSTextField(labelWithString: "")
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+
+    init(text: String) {
+        super.init(frame: .zero)
+        wantsLayer = true
+
+        label.stringValue = text
+        label.font = NSFont.systemFont(ofSize: 10)
+        label.backgroundColor = .clear
+        label.alignment = .center
+        label.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(label)
+
+        NSLayoutConstraint.activate([
+            label.topAnchor.constraint(equalTo: topAnchor, constant: 2),
+            label.bottomAnchor.constraint(equalTo: bottomAnchor, constant: -2),
+            label.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 4),
+            label.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -4),
+        ])
+
+        toolTip = "点击检查更新"
+        refresh()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setText(_ s: String) { label.stringValue = s }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let a = trackingArea { removeTrackingArea(a) }
+        let a = NSTrackingArea(rect: bounds,
+                               options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .cursorUpdate],
+                               owner: self, userInfo: nil)
+        addTrackingArea(a); trackingArea = a
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
+    override func mouseEntered(with event: NSEvent) { isHovered = true; refresh() }
+    override func mouseExited(with event: NSEvent)  { isHovered = false; refresh() }
+    override func mouseDown(with event: NSEvent)    { onClick?() }
+
+    private func refresh() {
+        label.textColor = isHovered
+            ? NSColor.white.withAlphaComponent(0.85)
+            : NSColor.white.withAlphaComponent(0.45)
+    }
+}
+
+/// 升级胶囊按钮：accent 色背景 + 向上箭头 + "升级" 文字。
+/// 仅在有新版本时由外部 setLatestVersion + 取消 isHidden 显示。
+final class UpgradePillButton: NSView {
+
+    var onClick: (() -> Void)?
+
+    private let bgLayer = CALayer()
+    private let iconView = NSImageView()
+    private let label = NSTextField(labelWithString: "升级")
+    private var trackingArea: NSTrackingArea?
+    private var isHovered = false
+
+    init() {
+        super.init(frame: NSRect(x: 0, y: 0, width: 60, height: 18))
+        wantsLayer = true
+        layer?.masksToBounds = false
+
+        bgLayer.cornerRadius = 9
+        bgLayer.cornerCurve = .continuous
+        layer?.addSublayer(bgLayer)
+
+        let cfg = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
+        iconView.image = NSImage(systemSymbolName: "arrow.up.circle.fill",
+                                 accessibilityDescription: nil)?
+            .withSymbolConfiguration(cfg)
+        iconView.contentTintColor = .white
+        iconView.translatesAutoresizingMaskIntoConstraints = false
+
+        label.font = NSFont.systemFont(ofSize: 10, weight: .semibold)
+        label.textColor = .white
+        label.backgroundColor = .clear
+        label.translatesAutoresizingMaskIntoConstraints = false
+
+        let stack = NSStackView(views: [iconView, label])
+        stack.orientation = .horizontal
+        stack.spacing = 3
+        stack.alignment = .centerY
+        stack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(stack)
+
+        NSLayoutConstraint.activate([
+            stack.centerYAnchor.constraint(equalTo: centerYAnchor),
+            stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 8),
+            stack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            heightAnchor.constraint(equalToConstant: 18),
+        ])
+
+        toolTip = "发现新版本，点击立即升级"
+        refresh()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    func setLatestVersion(_ v: String) {
+        label.stringValue = "升级"
+        toolTip = "新版本 v\(v) 可用，点击升级"
+    }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        bgLayer.frame = bounds
+        CATransaction.commit()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let a = trackingArea { removeTrackingArea(a) }
+        let a = NSTrackingArea(rect: bounds,
+                               options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .cursorUpdate],
+                               owner: self, userInfo: nil)
+        addTrackingArea(a); trackingArea = a
+    }
+
+    override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
+    override func mouseEntered(with event: NSEvent) { isHovered = true; refresh() }
+    override func mouseExited(with event: NSEvent)  { isHovered = false; refresh() }
+    override func mouseDown(with event: NSEvent)    { onClick?() }
+
+    private func refresh() {
+        let base = NSColor.controlAccentColor
+        bgLayer.backgroundColor = (isHovered ? base : base.withAlphaComponent(0.85)).cgColor
     }
 }

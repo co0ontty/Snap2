@@ -37,6 +37,13 @@ class StatusBarController {
             name: .updateAvailable,
             object: nil
         )
+        // 设置窗口等外部入口可通过通知请求一次更新检查，复用同一套 alert/install 流程
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleUpdateCheckRequested(_:)),
+            name: .updateCheckRequested,
+            object: nil
+        )
     }
 
     deinit {
@@ -312,6 +319,10 @@ class StatusBarController {
         if alert.runModal() == .alertFirstButtonReturn {
             NSWorkspace.shared.open(releaseURL)
         }
+    }
+
+    @objc private func handleUpdateCheckRequested(_ note: Notification) {
+        checkForUpdate()
     }
 
     @objc private func handleUpdateAvailable(_ note: Notification) {

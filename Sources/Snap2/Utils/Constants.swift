@@ -61,6 +61,10 @@ extension Notification.Name {
     static let annotationToolChanged = Notification.Name("com.chuer.snap2.annotationToolChanged")
     static let settingsChanged = Notification.Name("com.chuer.snap2.settingsChanged")
     static let updateAvailable = Notification.Name("com.chuer.snap2.updateAvailable")
+    /// 一次更新检查完成且当前已是最新版本（用于清除 UI 角标）
+    static let updateNotAvailable = Notification.Name("com.chuer.snap2.updateNotAvailable")
+    /// 外部 UI 请求触发一次手动更新检查（由菜单栏控制器统一接管 alert 流程）
+    static let updateCheckRequested = Notification.Name("com.chuer.snap2.updateCheckRequested")
 }
 
 // MARK: - Drawing Defaults
