@@ -1,4 +1,5 @@
 import AppKit
+import ImageIO
 import UniformTypeIdentifiers
 
 /// 截图覆盖层视图。两阶段：
@@ -785,20 +786,50 @@ final class SelectionView: NSView {
         return URL(fileURLWithPath: NSHomeDirectory())
     }
 
+    /// 取出 NSImage 中第一张可用的 CGImage。
+    /// 优先走 NSBitmapImageRep.cgImage（renderFinalImage 输出走的就是这条路径，
+    /// 能完整保留 Display P3 等色彩空间），否则兜底用 NSImage.cgImage(forProposedRect:...)。
+    private func primaryCGImage(of image: NSImage) -> CGImage? {
+        if let bitmap = image.representations.first as? NSBitmapImageRep,
+           let cg = bitmap.cgImage {
+            return cg
+        }
+        var proposed = NSRect(origin: .zero, size: image.size)
+        return image.cgImage(forProposedRect: &proposed, context: nil, hints: nil)
+    }
+
+    /// 用 ImageIO 走 CGImageDestination 编码。
+    /// 相比 NSBitmapImageRep.representation(using:)，这条路径会把 cgImage.colorSpace 完整写成 ICC profile，
+    /// 修复 PNG 在 Chrome / 微信 / PS 等非系统 app 里被按 sRGB 解释而偏暗的问题。
+    private func encodeWithImageIO(cgImage: CGImage, type: UTType, quality: Double?) -> Data {
+        let data = NSMutableData()
+        guard let dest = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else {
+            return Data()
+        }
+        var properties: [CFString: Any] = [:]
+        if type == .jpeg, let q = quality {
+            properties[kCGImageDestinationLossyCompressionQuality] = max(0.0, min(1.0, q))
+        }
+        CGImageDestinationAddImage(dest, cgImage, properties as CFDictionary)
+        guard CGImageDestinationFinalize(dest) else { return Data() }
+        return data as Data
+    }
+
     private func copyImageToClipboard(_ image: NSImage) {
         let pb = NSPasteboard.general
         pb.clearContents()
 
-        if let rep = image.representations.first as? NSBitmapImageRep {
-            if let tiff = rep.tiffRepresentation {
-                pb.setData(tiff, forType: .tiff)
+        // PNG 是关键路径：现代 app 几乎都从 pasteboard 读 PNG，所以必须走 ImageIO 把
+        // Display P3 ICC profile 嵌入；否则 Chrome / 微信 / PS 会按 sRGB 解释 P3 像素。
+        if let cg = primaryCGImage(of: image) {
+            let pngData = encodeWithImageIO(cgImage: cg, type: .png, quality: nil)
+            if !pngData.isEmpty {
+                pb.setData(pngData, forType: .png)
             }
-            if let png = rep.representation(using: .png, properties: [:]) {
-                pb.setData(png, forType: .png)
-            }
-            return
         }
 
+        // TIFF：保留 image.tiffRepresentation 路径——NSBitmapImageRep 内部默认走 LZW
+        // 压缩，剪贴板大小可控；且这是 macOS Cocoa 历史首选，PS / iWork 等老 app 优先读它。
         if let tiff = image.tiffRepresentation {
             pb.setData(tiff, forType: .tiff)
         }
@@ -806,31 +837,23 @@ final class SelectionView: NSView {
 
     /// 按设置编码：返回 (数据, 扩展名)
     private func encode(_ image: NSImage) -> (Data, String) {
-        let rep: NSBitmapImageRep?
-        if let bitmap = image.representations.first as? NSBitmapImageRep {
-            rep = bitmap
-        } else {
-            var proposed = NSRect(origin: .zero, size: image.size)
-            rep = image.cgImage(forProposedRect: &proposed, context: nil, hints: nil).map { cgImage in
-                let bitmap = NSBitmapImageRep(cgImage: cgImage)
-                bitmap.size = image.size
-                return bitmap
-            }
-        }
-        guard let rep else { return (Data(), "png") }
-
         let format = UserDefaults.standard.string(forKey: UDKey.imageFormat) ?? "png"
+        let ext = format == "jpeg" ? "jpg" : "png"
+        guard let cg = primaryCGImage(of: image) else { return (Data(), ext) }
+
         if format == "jpeg" {
             let q = UserDefaults.standard.object(forKey: UDKey.jpegQuality) as? Double ?? 0.85
-            let data = rep.representation(using: .jpeg, properties: [.compressionFactor: q]) ?? Data()
-            return (data, "jpg")
+            return (encodeWithImageIO(cgImage: cg, type: .jpeg, quality: q), "jpg")
         }
-        let data = rep.representation(using: .png, properties: [:]) ?? Data()
-        return (data, "png")
+        return (encodeWithImageIO(cgImage: cg, type: .png, quality: nil), "png")
     }
 
     private func writeImage(_ image: NSImage, to url: URL) {
         let (data, _) = encode(image)
+        guard !data.isEmpty else {
+            NSLog("[SelectionView] 编码图片失败，跳过写盘: \(url.path)")
+            return
+        }
         try? data.write(to: url)
     }
 
