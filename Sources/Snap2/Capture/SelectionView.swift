@@ -73,12 +73,9 @@ final class SelectionView: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     override func makeBackingLayer() -> CALayer {
-        let l = super.makeBackingLayer()
-        // layer 的 backing store 同样设为 P3，与 OverlayWindow.colorSpace 对齐。
-        // CALayer 默认用 device RGB（sRGB），P3 CGImage 经 Core Animation 合成时
-        // 会被 tone-mapped 导致饱和色偏暗；设为 P3 后颜色完整保留。
-        l.colorspace = CGColorSpace(name: CGColorSpace.displayP3)
-        return l
+        // backing store 的色彩空间由 OverlayWindow.colorSpace（P3）决定，
+        // CALayer 公共 API 没有 colorspace 属性，无需也不能在这里再设一次。
+        return super.makeBackingLayer()
     }
 
     // MARK: - 绘制
