@@ -1,4 +1,5 @@
 import AppKit
+import CoreImage
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -33,6 +34,11 @@ final class SelectionView: NSView {
     private var elements: [AnnotationElement] = []
     private var currentElement: AnnotationElement?
     private var undoStack: [[AnnotationElement]] = []
+
+    /// 马赛克源图缓存：key = 块大小（像素，整数化避免浮点 key 抖动），value = pre-pixelated 整图
+    private var mosaicCache: [Int: CGImage] = [:]
+    /// 复用的 CIContext（开销大，避免每次新建）
+    private static let mosaicCIContext = CIContext()
 
     private var currentTool: AnnotationToolType = .arrow
     private var currentColor: NSColor = AnnotationPalette.colors[0]
@@ -149,6 +155,7 @@ final class SelectionView: NSView {
     func startPinEdit(image: NSImage, cgImage: CGImage?, selectionInView rect: NSRect) {
         capturedImage = image
         capturedCGImage = cgImage
+        mosaicCache.removeAll()
         selectionRect = rect
         mode = .annotating
         showAnnotationToolbar()
@@ -500,6 +507,7 @@ final class SelectionView: NSView {
            let cropped = cropFrozenCGImage(frozenCG, frozenPointSize: frozenSize, to: selectionRect) {
             self.capturedCGImage = cropped.cgImage
             self.capturedImage = NSImage(cgImage: cropped.cgImage, size: cropped.pointSize)
+            self.mosaicCache.removeAll()
             self.mode = .annotating
             self.showAnnotationToolbar()
             self.needsDisplay = true
@@ -524,6 +532,7 @@ final class SelectionView: NSView {
             }
             self.capturedCGImage = cgImage
             self.capturedImage = NSImage(cgImage: cgImage, size: pointSize)
+            self.mosaicCache.removeAll()
             self.mode = .annotating
             self.showAnnotationToolbar()
             self.needsDisplay = true
@@ -562,6 +571,38 @@ final class SelectionView: NSView {
         return (cropped, pointSize)
     }
 
+    // MARK: - 马赛克源生成
+
+    /// 把当前选区背景按"线宽 → 块大小"映射做一次 CIPixellate，并按块大小缓存整图。
+    /// 同一线宽多次创建 mosaic element 共享同一份 CGImage，CGImage.cropping 是 O(1)。
+    private func ensureMosaicSource(forLineWidth lineWidth: CGFloat) -> CGImage? {
+        guard let cgSource = capturedCGImage,
+              let pointSize = capturedImage?.size,
+              pointSize.width > 0, pointSize.height > 0 else { return nil }
+
+        // 像素分辨率与点尺寸的比例（≈ backingScale）
+        let scale = CGFloat(cgSource.width) / pointSize.width
+        // 线宽 → 块大小：thin/medium/thick = 1.5/3.0/5.5 → 约 8/15/27 点
+        let blockPoints = max(6, round(lineWidth * 5))
+        let blockPixels = max(2, blockPoints * scale)
+        let key = Int(blockPixels.rounded())
+
+        if let cached = mosaicCache[key] { return cached }
+
+        let ci = CIImage(cgImage: cgSource)
+        guard let filter = CIFilter(name: "CIPixellate") else { return nil }
+        filter.setValue(ci, forKey: kCIInputImageKey)
+        // inputCenter 决定块网格对齐，用图像中心即可
+        filter.setValue(CIVector(x: ci.extent.midX, y: ci.extent.midY), forKey: kCIInputCenterKey)
+        filter.setValue(blockPixels, forKey: kCIInputScaleKey)
+        guard let output = filter.outputImage,
+              let baked = Self.mosaicCIContext.createCGImage(output, from: ci.extent) else {
+            return nil
+        }
+        mosaicCache[key] = baked
+        return baked
+    }
+
     // MARK: - 标注鼠标
 
     private func handleAnnotationMouseDown(p: NSPoint, event: NSEvent) {
@@ -596,6 +637,10 @@ final class SelectionView: NSView {
         el.startPoint = local
         el.endPoint = local
         if currentTool == .freedraw { el.points.append(local) }
+        if currentTool == .mosaic {
+            el.mosaicSource = ensureMosaicSource(forLineWidth: currentLineWidth)
+            el.mosaicSourceSize = capturedImage?.size ?? .zero
+        }
         currentElement = el
         needsDisplay = true
     }

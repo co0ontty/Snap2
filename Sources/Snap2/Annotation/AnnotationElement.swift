@@ -11,6 +11,11 @@ final class AnnotationElement {
     var text: String?
     var font: NSFont?
 
+    /// 马赛克专用：整张选区背景的 pixelated 版本（CGImage 引用，按需共享）
+    var mosaicSource: CGImage?
+    /// mosaicSource 对应的逻辑（点）尺寸 = 选区点尺寸
+    var mosaicSourceSize: NSSize = .zero
+
     init(toolType: AnnotationToolType, color: NSColor, lineWidth: CGFloat) {
         self.toolType = toolType
         self.color = color
@@ -25,6 +30,7 @@ enum AnnotationToolType: Int, CaseIterable {
     case freedraw
     case text
     case highlight
+    case mosaic
 
     var displayName: String {
         switch self {
@@ -34,6 +40,7 @@ enum AnnotationToolType: Int, CaseIterable {
         case .freedraw: return "画笔"
         case .text: return "文字"
         case .highlight: return "高亮"
+        case .mosaic: return "马赛克"
         }
     }
 
@@ -45,9 +52,10 @@ enum AnnotationToolType: Int, CaseIterable {
         case .freedraw: return "pencil.tip"
         case .text: return "textformat"
         case .highlight: return "highlighter"
+        case .mosaic: return "square.grid.3x3.fill"
         }
     }
 
-    /// 数字键快捷键（1–6）
+    /// 数字键快捷键（1–7）
     var shortcutDigit: Int { rawValue + 1 }
 }

@@ -17,6 +17,7 @@ final class AnnotationToolRegistry {
         register(FreedrawTool())
         register(TextTool())
         register(HighlightTool())
+        register(MosaicTool())
     }
 
     private func register(_ tool: AnnotationTool) {
