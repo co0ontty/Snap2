@@ -1,7 +1,11 @@
 #!/bin/bash
 #
-# Snap² 一键构建脚本
-# 编译 → 生成图标 → 打包 App Bundle → 创建美化 DMG
+# Snap² 一键构建脚本（双架构）
+#
+# 编译 arm64 + x86_64 两份二进制，再 lipo 合一份 universal：
+#   - Snap2-arm64.dmg     （Apple Silicon 单架构 .app，体积小）
+#   - Snap2-x86_64.dmg    （Intel 单架构 .app）
+#   - Snap2.zip           （universal .app，自动更新通道，跨架构通吃）
 #
 # 用法: chmod +x build_dmg.sh && ./build_dmg.sh
 #
@@ -12,15 +16,14 @@ set -euo pipefail
 APP_NAME="Snap2"
 DISPLAY_NAME="Snap²"
 BUNDLE_ID="com.chuer.snap2"
-DMG_NAME="${APP_NAME}.dmg"
 ZIP_NAME="${APP_NAME}.zip"
 DMG_VOLUME_NAME="${DISPLAY_NAME}"
-APP_BUNDLE="${APP_NAME}.app"
+APP_BUNDLE="${APP_NAME}.app"            # universal .app（zip 通道）
 BUILD_DIR="build_output"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-ICON_SET_DIR="${SCRIPT_DIR}/build_tmp/${APP_NAME}.iconset"
-DMG_TEMP="${SCRIPT_DIR}/build_tmp/dmg_staging"
-DMG_RW="${SCRIPT_DIR}/build_tmp/rw.dmg"
+
+# 支持的架构
+ARCHS=("arm64" "x86_64")
 
 # 可选：Developer ID 签名身份。设置后走"Developer ID + 公证"路径，否则 ad-hoc。
 # 例: export DEV_ID_APPLICATION="Developer ID Application: Your Name (TEAMID)"
@@ -56,6 +59,11 @@ check_environment() {
         exit 1
     fi
 
+    if ! command -v lipo &>/dev/null; then
+        echo "错误: 未找到 lipo（双架构合并需要）"
+        exit 1
+    fi
+
     if ! command -v iconutil &>/dev/null; then
         echo "警告: 未找到 iconutil，将跳过图标生成"
     fi
@@ -64,29 +72,48 @@ check_environment() {
     swift_version=$(swift --version 2>&1 | head -1)
     echo "  Swift: ${swift_version}"
     echo "  macOS: $(sw_vers -productVersion)"
+    echo "  目标架构: ${ARCHS[*]} + universal"
     echo ""
 }
 
 # ──────────────── 清理 ────────────────
 clean_previous() {
     echo "=== 清理上次构建产物 ==="
-    rm -rf "${APP_BUNDLE}" "${DMG_NAME}" build_tmp
+    rm -rf "${APP_BUNDLE}"
+    rm -rf "${APP_NAME}-arm64.app" "${APP_NAME}-x86_64.app"
+    rm -f "${APP_NAME}.dmg" "${APP_NAME}-arm64.dmg" "${APP_NAME}-x86_64.dmg" "${ZIP_NAME}"
+    rm -rf build_tmp "${BUILD_DIR}"
     mkdir -p build_tmp
     echo ""
 }
 
-# ──────────────── 编译 ────────────────
+# ──────────────── 编译（双架构 + 合并 universal）────────────────
 build_project() {
-    echo "=== 编译项目 (Release) ==="
+    echo "=== 编译项目 (Release, 双架构) ==="
     mkdir -p "${BUILD_DIR}"
-    # 不再 tail 截断 stderr，否则 CI 上失败时根因被吞
-    swiftc -o "${BUILD_DIR}/${APP_NAME}" \
-        -target arm64-apple-macosx14.0 \
-        -sdk "$(xcrun --show-sdk-path)" \
-        -swift-version 5 \
-        -O \
-        $(find Sources -name "*.swift")
-    echo "  二进制文件: ${BUILD_DIR}/${APP_NAME}"
+    local sources
+    # shellcheck disable=SC2207
+    sources=( $(find Sources -name "*.swift") )
+    local sdk
+    sdk="$(xcrun --show-sdk-path)"
+
+    for arch in "${ARCHS[@]}"; do
+        echo "  编译 ${arch}..."
+        # 不再 tail 截断 stderr，否则 CI 上失败时根因被吞
+        swiftc -o "${BUILD_DIR}/${APP_NAME}-${arch}" \
+            -target "${arch}-apple-macosx14.0" \
+            -sdk "${sdk}" \
+            -swift-version 5 \
+            -O \
+            "${sources[@]}"
+    done
+
+    echo "  合并 universal binary (lipo)..."
+    lipo -create \
+        "${BUILD_DIR}/${APP_NAME}-arm64" \
+        "${BUILD_DIR}/${APP_NAME}-x86_64" \
+        -output "${BUILD_DIR}/${APP_NAME}-universal"
+    lipo -info "${BUILD_DIR}/${APP_NAME}-universal" | sed 's/^/    /'
     echo ""
 }
 
@@ -107,17 +134,23 @@ generate_icon() {
 }
 
 # ──────────────── 创建 App Bundle ────────────────
-create_app_bundle() {
-    echo "=== 创建 App Bundle ==="
+# arg1: 二进制路径
+# arg2: 输出 .app 路径
+build_app_bundle() {
+    local binary_path="$1"
+    local app_path="$2"
 
-    local contents="${APP_BUNDLE}/Contents"
+    echo "=== 创建 App Bundle: ${app_path} ==="
+
+    rm -rf "${app_path}"
+    local contents="${app_path}/Contents"
     local macos_dir="${contents}/MacOS"
     local resources_dir="${contents}/Resources"
 
     mkdir -p "${macos_dir}" "${resources_dir}"
 
     # 1. 复制二进制文件
-    cp "${BUILD_DIR}/${APP_NAME}" "${macos_dir}/${APP_NAME}"
+    cp "${binary_path}" "${macos_dir}/${APP_NAME}"
     chmod +x "${macos_dir}/${APP_NAME}"
 
     # 2. 复制 Info.plist
@@ -136,11 +169,38 @@ create_app_bundle() {
     fi
 
     # 5. 签名
+    sign_bundle "${app_path}"
+
+    # 6. 验证 Bundle 结构
+    echo "  验证 Bundle 结构..."
+    local ok=true
+    for f in "${contents}/Info.plist" "${contents}/PkgInfo" "${macos_dir}/${APP_NAME}"; do
+        if [ ! -f "$f" ]; then
+            echo "    缺失: $f"
+            ok=false
+        fi
+    done
+    $ok && echo "  Bundle 结构完整"
+
+    # 打印架构信息（debug 友好）
+    echo "  二进制架构:"
+    lipo -archs "${macos_dir}/${APP_NAME}" | sed 's/^/    /'
+
+    local app_size
+    app_size=$(du -sh "${app_path}" | cut -f1)
+    echo "  App 大小: ${app_size}"
+    echo ""
+}
+
+# ──────────────── 签名 ────────────────
+sign_bundle() {
+    local app_path="$1"
+
     if [ -n "${DEV_ID_APPLICATION}" ]; then
-        echo "  签名 App Bundle (Developer ID + Hardened Runtime)..."
+        echo "  签名 (Developer ID + Hardened Runtime)..."
         # 内层二进制先签，再签 .app
-        find "${APP_BUNDLE}/Contents" -type f \( -perm -u+x -o -name "*.dylib" \) \
-            -not -path "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}" -print0 \
+        find "${app_path}/Contents" -type f \( -perm -u+x -o -name "*.dylib" \) \
+            -not -path "${app_path}/Contents/MacOS/${APP_NAME}" -print0 \
             | xargs -0 -I {} codesign --force --options runtime --timestamp \
                 --sign "${DEV_ID_APPLICATION}" \
                 --entitlements "Resources/${APP_NAME}.entitlements" \
@@ -148,15 +208,15 @@ create_app_bundle() {
         codesign --force --options runtime --timestamp \
             --sign "${DEV_ID_APPLICATION}" \
             --entitlements "Resources/${APP_NAME}.entitlements" \
-            "${APP_BUNDLE}/Contents/MacOS/${APP_NAME}"
+            "${app_path}/Contents/MacOS/${APP_NAME}"
         codesign --force --options runtime --timestamp \
             --sign "${DEV_ID_APPLICATION}" \
             --entitlements "Resources/${APP_NAME}.entitlements" \
-            "${APP_BUNDLE}"
+            "${app_path}"
         echo "  验证签名..."
-        codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
+        codesign --verify --deep --strict --verbose=2 "${app_path}"
     elif [ -n "${SELF_SIGN_IDENTITY}" ]; then
-        echo "  签名 App Bundle (Self-signed: ${SELF_SIGN_IDENTITY})..."
+        echo "  签名 (Self-signed: ${SELF_SIGN_IDENTITY})..."
         # 自签名不开 hardened runtime / timestamp：
         #   - 不用走公证；
         #   - hardened runtime 会拒掉一些 API，对裸机 Swift app 反而碍事；
@@ -168,41 +228,22 @@ create_app_bundle() {
         codesign --force --deep --sign "${SELF_SIGN_IDENTITY}" \
             "${sign_keychain_arg[@]}" \
             --entitlements "Resources/${APP_NAME}.entitlements" \
-            "${APP_BUNDLE}"
+            "${app_path}"
         echo "  验证签名..."
-        codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
-        # 打印 designated requirement，方便人工核对证书指纹是否稳定
+        codesign --verify --deep --strict --verbose=2 "${app_path}"
         echo "  designated requirement:"
-        codesign -d --requirements - "${APP_BUNDLE}" 2>&1 | sed 's/^/    /'
+        codesign -d --requirements - "${app_path}" 2>&1 | sed 's/^/    /'
     else
-        echo "  签名 App Bundle (ad-hoc)..."
+        echo "  签名 (ad-hoc)..."
         codesign --force --deep --sign - \
             --entitlements "Resources/${APP_NAME}.entitlements" \
-            "${APP_BUNDLE}" 2>/dev/null || echo "  警告: 签名失败 (ad-hoc)，应用仍可本地运行"
+            "${app_path}" 2>/dev/null || echo "  警告: 签名失败 (ad-hoc)，应用仍可本地运行"
     fi
-
-    # 6. 验证 Bundle 结构
-    echo "  验证 Bundle 结构..."
-    local ok=true
-    for f in "${contents}/Info.plist" "${contents}/PkgInfo" "${macos_dir}/${APP_NAME}"; do
-        if [ ! -f "$f" ]; then
-            echo "    缺失: $f"
-            ok=false
-        fi
-    done
-    if $ok; then
-        echo "  Bundle 结构完整"
-    fi
-
-    local app_size
-    app_size=$(du -sh "${APP_BUNDLE}" | cut -f1)
-    echo "  App 大小: ${app_size}"
-    echo ""
 }
 
-# ──────────────── 打 ZIP（用于自动更新通道）────────────────
+# ──────────────── 打 ZIP（用于自动更新通道，universal）────────────────
 create_zip() {
-    echo "=== 创建 ZIP 自动更新包 ==="
+    echo "=== 创建 ZIP 自动更新包 (universal) ==="
     rm -f "${ZIP_NAME}"
     /usr/bin/ditto -c -k --keepParent "${APP_BUNDLE}" "${ZIP_NAME}"
     local zip_size
@@ -226,17 +267,25 @@ notarize_artifact() {
 }
 
 # ──────────────── 创建美化 DMG ────────────────
-create_dmg() {
-    echo "=== 创建 DMG 安装包 ==="
+# arg1: 源 .app 路径
+# arg2: 输出 .dmg 路径
+create_dmg_for_app() {
+    local source_app="$1"
+    local dmg_out="$2"
 
-    rm -rf "${DMG_TEMP}" "${DMG_RW}" "${DMG_NAME}"
-    mkdir -p "${DMG_TEMP}"
+    echo "=== 创建 DMG: ${dmg_out} ==="
 
-    # 复制 App 到临时目录
-    cp -R "${APP_BUNDLE}" "${DMG_TEMP}/"
+    local stage="${SCRIPT_DIR}/build_tmp/dmg_$(basename "${dmg_out}" .dmg)"
+    local rw_path="${stage}/rw.dmg"
+
+    rm -rf "${stage}" "${dmg_out}"
+    mkdir -p "${stage}/staging"
+
+    # 把源 .app 改名成统一的 Snap2.app 放进 dmg，免得拖到 Applications 后出现两份不同 bundle id
+    cp -R "${source_app}" "${stage}/staging/${APP_BUNDLE}"
 
     # 创建 Applications 快捷方式
-    ln -s /Applications "${DMG_TEMP}/Applications"
+    ln -s /Applications "${stage}/staging/Applications"
 
     # DMG 窗口尺寸
     local win_w=540
@@ -244,8 +293,8 @@ create_dmg() {
 
     # 生成 DMG 背景图
     echo "  生成 DMG 背景图..."
-    mkdir -p "${DMG_TEMP}/.background"
-    python3 - "${DMG_TEMP}/.background/bg.png" ${win_w} ${win_h} <<'BGEOF'
+    mkdir -p "${stage}/staging/.background"
+    python3 - "${stage}/staging/.background/bg.png" ${win_w} ${win_h} <<'BGEOF'
 import sys, struct, zlib
 
 out_path = sys.argv[1]
@@ -276,17 +325,20 @@ BGEOF
 
     # 1. 创建可读写 DMG
     echo "  创建临时 DMG..."
-    hdiutil create -srcfolder "${DMG_TEMP}" \
+    hdiutil create -srcfolder "${stage}/staging" \
         -volname "${DMG_VOLUME_NAME}" \
         -fs HFS+ \
         -format UDRW \
         -size 100m \
-        "${DMG_RW}" -quiet
+        "${rw_path}" -quiet
 
     # 2. 挂载并美化
     echo "  美化 DMG 窗口布局..."
     local mount_dir
-    mount_dir=$(hdiutil attach "${DMG_RW}" -readwrite -noverify -noautoopen | grep -o '/Volumes/.*' | tail -1)
+    mount_dir=$(hdiutil attach "${rw_path}" -readwrite -noverify -noautoopen | grep -o '/Volumes/.*' | tail -1)
+    # 从 mount_dir 反推真实卷名：上次同名卷未卸干净时 macOS 会自动改名为 "Snap² 1" 之类
+    local mounted_volume_name
+    mounted_volume_name=$(basename "${mount_dir}")
 
     # 等待挂载完成
     sleep 1
@@ -294,7 +346,7 @@ BGEOF
     # 用 AppleScript 设置 Finder 窗口样式
     osascript <<ASEOF
 tell application "Finder"
-    tell disk "${DMG_VOLUME_NAME}"
+    tell disk "${mounted_volume_name}"
         open
         set current view of container window to icon view
         set toolbar visible of container window to false
@@ -308,7 +360,7 @@ tell application "Finder"
         set background picture of viewOptions to file ".background:bg.png"
 
         -- App 图标位置（左侧）
-        set position of item "${APP_NAME}.app" of container window to {150, 185}
+        set position of item "${APP_BUNDLE}" of container window to {150, 185}
         -- Applications 快捷方式位置（右侧）
         set position of item "Applications" of container window to {390, 185}
 
@@ -331,13 +383,13 @@ ASEOF
 
     # 4. 转换为压缩只读 DMG
     echo "  压缩为最终 DMG..."
-    hdiutil convert "${DMG_RW}" \
+    hdiutil convert "${rw_path}" \
         -format UDZO \
         -imagekey zlib-level=9 \
-        -o "${DMG_NAME}" -quiet
+        -o "${dmg_out}" -quiet
 
     local dmg_size
-    dmg_size=$(du -sh "${DMG_NAME}" | cut -f1)
+    dmg_size=$(du -sh "${dmg_out}" | cut -f1)
     echo "  DMG 大小: ${dmg_size}"
     echo ""
 }
@@ -346,6 +398,7 @@ ASEOF
 cleanup() {
     echo "=== 清理临时文件 ==="
     rm -rf build_tmp
+    rm -rf "${APP_NAME}-arm64.app" "${APP_NAME}-x86_64.app"
     echo ""
 }
 
@@ -356,15 +409,16 @@ print_result() {
     echo "============================================"
     echo ""
     echo "  产物:"
-    echo "    ${SCRIPT_DIR}/${APP_BUNDLE}"
-    echo "    ${SCRIPT_DIR}/${DMG_NAME}     (首次手动安装)"
-    echo "    ${SCRIPT_DIR}/${ZIP_NAME}     (内置自动更新通道)"
+    echo "    ${SCRIPT_DIR}/${APP_BUNDLE}                (universal .app)"
+    echo "    ${SCRIPT_DIR}/${APP_NAME}-arm64.dmg     (Apple Silicon)"
+    echo "    ${SCRIPT_DIR}/${APP_NAME}-x86_64.dmg    (Intel)"
+    echo "    ${SCRIPT_DIR}/${ZIP_NAME}              (universal, 自动更新通道)"
     echo ""
-    echo "  Release 上传两个产物：DMG 给首装用户，ZIP 给自动更新流程。"
+    echo "  Release 上传：两个 dmg 给首装用户对架构挑选；zip 走自动更新流程，跨架构通吃。"
     echo ""
     echo "  安装方式:"
-    echo "    1. 双击 ${DMG_NAME}"
-    echo "    2. 将 ${APP_NAME}.app 拖入 Applications 文件夹"
+    echo "    1. 双击对应架构的 dmg（Apple Silicon 选 arm64；Intel 选 x86_64）"
+    echo "    2. 将 ${APP_BUNDLE} 拖入 Applications 文件夹"
     echo "    3. 从 Launchpad 或 Applications 启动 ${APP_NAME}"
     echo ""
     if [ -n "${DEV_ID_APPLICATION}" ]; then
@@ -399,11 +453,24 @@ main() {
     clean_previous
     build_project
     generate_icon
-    create_app_bundle
+
+    # 三个 .app：单架构两份用于 dmg，universal 一份用于 zip
+    local arm_app="${APP_NAME}-arm64.app"
+    local x64_app="${APP_NAME}-x86_64.app"
+
+    build_app_bundle "${BUILD_DIR}/${APP_NAME}-arm64"     "${arm_app}"
+    build_app_bundle "${BUILD_DIR}/${APP_NAME}-x86_64"    "${x64_app}"
+    build_app_bundle "${BUILD_DIR}/${APP_NAME}-universal" "${APP_BUNDLE}"
+
     create_zip
     notarize_artifact "${APP_BUNDLE}"
-    create_dmg
-    notarize_artifact "${DMG_NAME}"
+
+    create_dmg_for_app "${arm_app}" "${APP_NAME}-arm64.dmg"
+    create_dmg_for_app "${x64_app}" "${APP_NAME}-x86_64.dmg"
+
+    notarize_artifact "${APP_NAME}-arm64.dmg"
+    notarize_artifact "${APP_NAME}-x86_64.dmg"
+
     cleanup
     print_result
 }

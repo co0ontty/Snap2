@@ -157,23 +157,50 @@ final class UpdateChecker {
             ?? URL(string: "https://github.com/\(repoSlug)/releases")!
 
         let rawAssets = (obj["assets"] as? [[String: Any]]) ?? []
+
+        // 当前进程架构（universal 下随实际加载架构）
+        #if arch(arm64)
+        let archHints = ["arm64", "aarch64", "applesilicon"]
+        #elseif arch(x86_64)
+        let archHints = ["x86_64", "x86-64", "intel", "amd64"]
+        #else
+        let archHints: [String] = []
+        #endif
+
+        // 1) 先尽量挑出名字含本架构标识的 zip / dmg
+        // 2) 再退化到第一个 zip / dmg 作为兜底
         var zipURL: URL?
         var zipSize: Int64?
         var dmgURL: URL?
         var dmgSize: Int64?
+        var fallbackZipURL: URL?
+        var fallbackZipSize: Int64?
+        var fallbackDmgURL: URL?
+        var fallbackDmgSize: Int64?
+
         for asset in rawAssets {
             guard let name = (asset["name"] as? String)?.lowercased(),
                   let dl = asset["browser_download_url"] as? String,
                   let url = URL(string: dl) else { continue }
             let size = (asset["size"] as? Int64) ?? (asset["size"] as? NSNumber).map { $0.int64Value }
-            if name.hasSuffix(".zip"), zipURL == nil {
-                zipURL = url
-                zipSize = size
-            } else if name.hasSuffix(".dmg"), dmgURL == nil {
-                dmgURL = url
-                dmgSize = size
+            let matchesArch = archHints.contains { name.contains($0) }
+            if name.hasSuffix(".zip") {
+                if matchesArch, zipURL == nil {
+                    zipURL = url; zipSize = size
+                } else if fallbackZipURL == nil {
+                    fallbackZipURL = url; fallbackZipSize = size
+                }
+            } else if name.hasSuffix(".dmg") {
+                if matchesArch, dmgURL == nil {
+                    dmgURL = url; dmgSize = size
+                } else if fallbackDmgURL == nil {
+                    fallbackDmgURL = url; fallbackDmgSize = size
+                }
             }
         }
+
+        if zipURL == nil { zipURL = fallbackZipURL; zipSize = fallbackZipSize }
+        if dmgURL == nil { dmgURL = fallbackDmgURL; dmgSize = fallbackDmgSize }
 
         return ParsedRelease(
             semver: stripped,

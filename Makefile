@@ -8,12 +8,15 @@ RESOURCES_DIR = $(CONTENTS)/Resources
 SDK = $(shell xcrun --show-sdk-path)
 SWIFT_FILES = $(shell find Sources -name "*.swift")
 
+# 默认编译当前机器架构；可显式覆盖：make build ARCH=x86_64
+ARCH ?= $(shell uname -m)
+
 .PHONY: build app icon run clean
 
 build:
 	@mkdir -p $(BUILD_DIR)
 	swiftc -o $(BINARY) \
-		-target arm64-apple-macosx14.0 \
+		-target $(ARCH)-apple-macosx14.0 \
 		-sdk $(SDK) \
 		-swift-version 5 \
 		-O \

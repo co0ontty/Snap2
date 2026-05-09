@@ -15,11 +15,18 @@
 ## 系统要求
 
 - macOS 14 (Sonoma) 或更高版本
-- Apple Silicon
+- Apple Silicon 或 Intel
 
 ## 安装
 
-从 [Releases](https://github.com/co0ontty/Snap2/releases) 下载最新 `Snap2.dmg`，挂载后将 `Snap2.app` 拖入 `Applications`。
+从 [Releases](https://github.com/co0ontty/Snap2/releases) 下载对应你机器架构的 dmg，挂载后将 `Snap2.app` 拖入 `Applications`：
+
+- Apple Silicon（M1/M2/...）：`Snap2-arm64.dmg`
+- Intel：`Snap2-x86_64.dmg`
+
+> 不确定自己的架构？打开「关于本机」，查看「芯片」一栏；或在终端跑 `uname -m`（`arm64` = Apple Silicon，`x86_64` = Intel）。
+>
+> 自动更新通道走的是 universal 版本的 `Snap2.zip`，跨架构通吃，所以更新不需要重新选架构。
 
 ### 首次启动：绕过「无法验证开发者」提示
 

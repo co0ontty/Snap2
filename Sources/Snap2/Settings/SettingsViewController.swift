@@ -11,6 +11,17 @@ enum SettingsType {
 
 final class SettingsViewController: NSViewController {
 
+    /// 当前进程架构的可读描述（编译期决定，universal 二进制下随实际加载架构呈现）
+    static let runtimeArchDescription: String = {
+        #if arch(arm64)
+        return "Apple Silicon · arm64"
+        #elseif arch(x86_64)
+        return "Intel · x86_64"
+        #else
+        return "未知架构"
+        #endif
+    }()
+
     private let settingsType: SettingsType
 
     // 通用设置控件
@@ -465,7 +476,7 @@ final class SettingsViewController: NSViewController {
 
         let infoRows: [(String, String)] = [
             ("系统要求", "macOS 14.0+"),
-            ("运行架构", "Apple Silicon · arm64"),
+            ("运行架构", Self.runtimeArchDescription),
             ("捕获引擎", "ScreenCaptureKit"),
         ]
 
