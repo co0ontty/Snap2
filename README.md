@@ -36,7 +36,9 @@
 
 首次启动后，需要在「系统设置 → 隐私与安全性 → 屏幕录制」中勾选 Snap²。
 
-> ⚠️ 由于使用的是 ad-hoc 签名，每次升级版本后系统会把新版本视为不同 app，**屏幕录制权限需要重新授予**。这是 macOS TCC 的设计：跨版本保留权限需要 Apple Developer ID 证书签名 + 公证。
+> Release 已改用**自签名证书**签名。一次授予后，**后续版本升级不再要求重授权屏幕录制**（前提是用同一张证书签的版本之间互升）。
+>
+> 从更早的 ad-hoc 版本升级到自签版本时，仍会被 TCC 当成新 app，需要重授权一次。
 
 ## 从源码构建
 
@@ -61,6 +63,8 @@ make app
 git tag v1.0.0
 git push origin v1.0.0
 ```
+
+CI 会从仓库 secrets 读取 `SELF_SIGN_P12_BASE64` / `SELF_SIGN_P12_PASSWORD` / `SELF_SIGN_IDENTITY` 来用自签证书出包；未配置 secrets 时自动回退到 ad-hoc。配置方法见 [`docs/self-signing.md`](docs/self-signing.md)。
 
 ## 许可
 

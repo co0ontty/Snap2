@@ -27,6 +27,13 @@ DMG_RW="${SCRIPT_DIR}/build_tmp/rw.dmg"
 DEV_ID_APPLICATION="${DEV_ID_APPLICATION:-}"
 # 可选：notarytool keychain profile（由 `xcrun notarytool store-credentials` 一次性创建）
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
+# 可选：自签名 Code Signing 证书的 Common Name。
+# 设置后走"自签名"路径：和 ad-hoc 不同，TCC 会以证书指纹作为身份，跨版本保留屏幕录制等权限。
+# 优先级：DEV_ID_APPLICATION > SELF_SIGN_IDENTITY > ad-hoc。
+# 例: export SELF_SIGN_IDENTITY="Snap2 Self Sign"
+SELF_SIGN_IDENTITY="${SELF_SIGN_IDENTITY:-}"
+# 可选：自签名路径下让 codesign 使用指定 keychain（CI 上常用，避免 system 默认 keychain 找不到 key）。
+SELF_SIGN_KEYCHAIN="${SELF_SIGN_KEYCHAIN:-}"
 
 cd "$SCRIPT_DIR"
 
@@ -148,6 +155,25 @@ create_app_bundle() {
             "${APP_BUNDLE}"
         echo "  验证签名..."
         codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
+    elif [ -n "${SELF_SIGN_IDENTITY}" ]; then
+        echo "  签名 App Bundle (Self-signed: ${SELF_SIGN_IDENTITY})..."
+        # 自签名不开 hardened runtime / timestamp：
+        #   - 不用走公证；
+        #   - hardened runtime 会拒掉一些 API，对裸机 Swift app 反而碍事；
+        #   - timestamp 需要 Apple TSA，自签证书走不通。
+        local sign_keychain_arg=()
+        if [ -n "${SELF_SIGN_KEYCHAIN}" ]; then
+            sign_keychain_arg=(--keychain "${SELF_SIGN_KEYCHAIN}")
+        fi
+        codesign --force --deep --sign "${SELF_SIGN_IDENTITY}" \
+            "${sign_keychain_arg[@]}" \
+            --entitlements "Resources/${APP_NAME}.entitlements" \
+            "${APP_BUNDLE}"
+        echo "  验证签名..."
+        codesign --verify --deep --strict --verbose=2 "${APP_BUNDLE}"
+        # 打印 designated requirement，方便人工核对证书指纹是否稳定
+        echo "  designated requirement:"
+        codesign -d --requirements - "${APP_BUNDLE}" 2>&1 | sed 's/^/    /'
     else
         echo "  签名 App Bundle (ad-hoc)..."
         codesign --force --deep --sign - \
@@ -341,14 +367,19 @@ print_result() {
     echo "    2. 将 ${APP_NAME}.app 拖入 Applications 文件夹"
     echo "    3. 从 Launchpad 或 Applications 启动 ${APP_NAME}"
     echo ""
-    if [ -z "${DEV_ID_APPLICATION}" ]; then
+    if [ -n "${DEV_ID_APPLICATION}" ]; then
+        echo "  Developer ID 签名 + 公证已启用，首次运行无需特殊操作。"
+    elif [ -n "${SELF_SIGN_IDENTITY}" ]; then
+        echo "  首次运行注意 (自签名: ${SELF_SIGN_IDENTITY}):"
+        echo "    - Gatekeeper 仍会提示「无法验证开发者」，走「系统设置 > 隐私与安全性 > 仍要打开」一次"
+        echo "    - 屏幕录制权限：系统设置 > 隐私与安全性 > 屏幕录制"
+        echo "    - 升级版本后权限会保留（前提：始终用同一张证书签名）"
+    else
         echo "  首次运行注意 (ad-hoc 签名):"
         echo "    - 系统会提示「无法验证开发者」"
         echo "    - macOS 15+ 必须走「系统设置 > 隐私与安全性 > 仍要打开」"
         echo "    - 屏幕录制权限：系统设置 > 隐私与安全性 > 屏幕录制"
-        echo "    - 升级版本后屏幕录制权限会被重置（ad-hoc 签名局限，需 Developer ID 才能根治）"
-    else
-        echo "  Developer ID 签名 + 公证已启用，首次运行无需特殊操作。"
+        echo "    - 升级版本后屏幕录制权限会被重置（ad-hoc 签名局限，配置 SELF_SIGN_IDENTITY 或 Developer ID 可根治）"
     fi
     echo ""
     echo "  快捷键: Ctrl+Shift+A (可在设置中自定义)"
