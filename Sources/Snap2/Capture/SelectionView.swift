@@ -797,21 +797,17 @@ final class SelectionView: NSView {
         if mode == .annotating { copyAndClose() }
     }
 
-    /// ⌘S 显式带对话框保存（高级用户）
+    /// ⌘S / 工具栏保存按钮：直接写到设置里的保存目录并关闭。
+    ///
+    /// 之前用 NSSavePanel.runModal 弹「另存为」对话框，但 OverlayWindow 是
+    /// .screenSaver 层级（覆盖一切），普通 panel 层级低会被遮挡——用户感受
+    /// 到的「点了没反应 / 好像有个确认对话」就是这个。NSAlert 在 promptText
+    /// 那边踩过同样的坑。
+    ///
+    /// 想改保存路径请去「设置 > 保存目录」改，截图过程不再弹路径选择。
     private func performSave() {
         guard mode == .annotating else { return }
-        let image = renderFinalImage()
-        let (_, ext) = encode(image)
-        let panel = NSSavePanel()
-        panel.allowedContentTypes = ext == "jpg" ? [.jpeg] : [.png]
-        panel.nameFieldStringValue = "Snap2_\(timestamp()).\(ext)"
-        panel.canCreateDirectories = true
-        if let dir = UserDefaults.standard.string(forKey: UDKey.saveDirectory) {
-            panel.directoryURL = URL(fileURLWithPath: dir)
-        }
-        if panel.runModal() == .OK, let url = panel.url {
-            writeImage(image, to: url)
-        }
+        silentSaveAndClose()
     }
 
     private func copyAndClose() {
@@ -916,15 +912,6 @@ final class SelectionView: NSView {
             return (encodeWithImageIO(cgImage: cg, type: .jpeg, quality: q), "jpg")
         }
         return (encodeWithImageIO(cgImage: cg, type: .png, quality: nil), "png")
-    }
-
-    private func writeImage(_ image: NSImage, to url: URL) {
-        let (data, _) = encode(image)
-        guard !data.isEmpty else {
-            NSLog("[SelectionView] 编码图片失败，跳过写盘: \(url.path)")
-            return
-        }
-        try? data.write(to: url)
     }
 
     private func renderFinalImage() -> NSImage {
