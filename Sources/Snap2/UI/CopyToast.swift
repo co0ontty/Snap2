@@ -1,6 +1,8 @@
 import AppKit
 
-/// 复制成功后的玻璃 toast。屏幕右下角弹出，含缩略图，1.4s 后自动消失。
+/// 复制 / 保存成功后的玻璃 toast。屏幕右上角弹出，含缩略图，1.4s 后自动消失。
+/// 之所以挪到右上：右下角与系统 Dock / 常驻浮窗位置冲突，且通知向下滑出和
+/// macOS 原生通知中心方向相反，反而显眼；改到右上后与系统通知一致。
 final class CopyToast {
 
     private static var current: GlassPanel?
@@ -56,20 +58,20 @@ final class CopyToast {
         sub.frame = NSRect(x: 76, y: 18, width: size.width - 90, height: 16)
         host.addSubview(sub)
 
-        // 屏幕右下角
+        // 屏幕右上角（与 macOS 系统通知方向一致）
         let visibleFrame = screen.visibleFrame
         let margin: CGFloat = 24
         let origin = NSPoint(
             x: visibleFrame.maxX - size.width - margin,
-            y: visibleFrame.minY + margin
+            y: visibleFrame.maxY - size.height - margin
         )
         panel.setFrameOrigin(origin)
         panel.alphaValue = 0
         panel.orderFront(nil)
         current = panel
 
-        // 入场：从下方滑入 + 渐显
-        let from = NSPoint(x: origin.x, y: origin.y - 24)
+        // 入场：从上方滑入 + 渐显
+        let from = NSPoint(x: origin.x, y: origin.y + 24)
         panel.setFrameOrigin(from)
 
         NSAnimationContext.runAnimationGroup({ ctx in

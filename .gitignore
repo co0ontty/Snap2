@@ -30,3 +30,6 @@ Package.resolved
 
 # 自签证书 / 私钥 / p12 / 导出密码 —— 严禁提交
 secrets/
+
+# Claude Code 用户图片上传缓存
+.wand-uploads/

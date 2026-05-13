@@ -818,28 +818,57 @@ final class SelectionView: NSView {
     }
 
     /// 按设置目录+格式直接写文件，不弹任何对话框
+    ///
+    /// 关键：ImageIO 编码（尤其 4K Retina PNG）+ 磁盘写入会耗 200~1000ms，
+    /// 如果都在主线程上做，overlay 会"挂着不动"直到写完，用户感受为「卡住」。
+    /// 这里把渲染（必须主线程，要读标注状态）留在前面，然后立刻关闭 overlay
+    /// 并弹 toast；编码 + 写盘异步丢到后台队列，失败再回主线程补一个错误 toast。
     private func silentSaveAndClose() {
         let image = renderFinalImage()
-        let (data, ext) = encode(image)
+        let format = UserDefaults.standard.string(forKey: UDKey.imageFormat) ?? "png"
+        let ext = format == "jpeg" ? "jpg" : "png"
         let dir = saveDirectoryURL()
         let filename = "Snap2_\(timestamp()).\(ext)"
         let url = dir.appendingPathComponent(filename)
+        let jpegQuality = UserDefaults.standard.object(forKey: UDKey.jpegQuality) as? Double ?? 0.85
 
-        do {
-            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-            try data.write(to: url)
-            CopyToast.show(image: image,
-                           message: "已保存",
-                           subtitle: filename)
-        } catch {
-            NSLog("[Snap2] 保存失败: \(error)")
-            // 保存失败兜底为复制
-            copyImageToClipboard(image)
-            CopyToast.show(image: image,
-                           message: "保存失败，已复制到剪贴板",
-                           subtitle: error.localizedDescription)
-        }
+        // 立即反馈：toast 先弹 + overlay 立刻关。后续的写盘失败再补一条错误 toast。
+        CopyToast.show(image: image,
+                       message: "已保存",
+                       subtitle: filename)
         CaptureManager.shared.finishAndClose()
+
+        // primaryCGImage / encodeWithImageIO 只做 CG/ImageIO 计算，线程安全，
+        // 这里直接派发到后台。失败回主线程兜底为复制 + 错误 toast。
+        DispatchQueue.global(qos: .userInitiated).async { [weak self] in
+            guard let cg = SelectionView.primaryCGImage(of: image) else {
+                DispatchQueue.main.async {
+                    self?.copyImageToClipboard(image)
+                    CopyToast.show(image: image,
+                                   message: "保存失败，已复制到剪贴板",
+                                   subtitle: "无法获取图像像素数据")
+                }
+                return
+            }
+            let data: Data
+            if format == "jpeg" {
+                data = SelectionView.encodeWithImageIO(cgImage: cg, type: .jpeg, quality: jpegQuality)
+            } else {
+                data = SelectionView.encodeWithImageIO(cgImage: cg, type: .png, quality: nil)
+            }
+            do {
+                try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+                try data.write(to: url)
+            } catch {
+                NSLog("[Snap2] 保存失败: \(error)")
+                DispatchQueue.main.async {
+                    self?.copyImageToClipboard(image)
+                    CopyToast.show(image: image,
+                                   message: "保存失败，已复制到剪贴板",
+                                   subtitle: error.localizedDescription)
+                }
+            }
+        }
     }
 
     private func saveDirectoryURL() -> URL {
@@ -855,7 +884,10 @@ final class SelectionView: NSView {
     /// 取出 NSImage 中第一张可用的 CGImage。
     /// 优先走 NSBitmapImageRep.cgImage（renderFinalImage 输出走的就是这条路径，
     /// 能完整保留 Display P3 等色彩空间），否则兜底用 NSImage.cgImage(forProposedRect:...)。
-    private func primaryCGImage(of image: NSImage) -> CGImage? {
+    ///
+    /// 设为 static：silentSaveAndClose 的后台编码路径需要在非主线程上调用，
+    /// 实例方法在 view 已 orderOut 后再被远程调起容易引起隐式 retain。
+    static func primaryCGImage(of image: NSImage) -> CGImage? {
         if let bitmap = image.representations.first as? NSBitmapImageRep,
            let cg = bitmap.cgImage {
             return cg
@@ -867,7 +899,9 @@ final class SelectionView: NSView {
     /// 用 ImageIO 走 CGImageDestination 编码。
     /// 相比 NSBitmapImageRep.representation(using:)，这条路径会把 cgImage.colorSpace 完整写成 ICC profile，
     /// 修复 PNG 在 Chrome / 微信 / PS 等非系统 app 里被按 sRGB 解释而偏暗的问题。
-    private func encodeWithImageIO(cgImage: CGImage, type: UTType, quality: Double?) -> Data {
+    ///
+    /// 设为 static：见 primaryCGImage 同名说明，需要从后台队列安全调用。
+    static func encodeWithImageIO(cgImage: CGImage, type: UTType, quality: Double?) -> Data {
         let data = NSMutableData()
         guard let dest = CGImageDestinationCreateWithData(data, type.identifier as CFString, 1, nil) else {
             return Data()
@@ -887,8 +921,8 @@ final class SelectionView: NSView {
 
         // PNG 是关键路径：现代 app 几乎都从 pasteboard 读 PNG，所以必须走 ImageIO 把
         // Display P3 ICC profile 嵌入；否则 Chrome / 微信 / PS 会按 sRGB 解释 P3 像素。
-        if let cg = primaryCGImage(of: image) {
-            let pngData = encodeWithImageIO(cgImage: cg, type: .png, quality: nil)
+        if let cg = SelectionView.primaryCGImage(of: image) {
+            let pngData = SelectionView.encodeWithImageIO(cgImage: cg, type: .png, quality: nil)
             if !pngData.isEmpty {
                 pb.setData(pngData, forType: .png)
             }
@@ -899,19 +933,6 @@ final class SelectionView: NSView {
         if let tiff = image.tiffRepresentation {
             pb.setData(tiff, forType: .tiff)
         }
-    }
-
-    /// 按设置编码：返回 (数据, 扩展名)
-    private func encode(_ image: NSImage) -> (Data, String) {
-        let format = UserDefaults.standard.string(forKey: UDKey.imageFormat) ?? "png"
-        let ext = format == "jpeg" ? "jpg" : "png"
-        guard let cg = primaryCGImage(of: image) else { return (Data(), ext) }
-
-        if format == "jpeg" {
-            let q = UserDefaults.standard.object(forKey: UDKey.jpegQuality) as? Double ?? 0.85
-            return (encodeWithImageIO(cgImage: cg, type: .jpeg, quality: q), "jpg")
-        }
-        return (encodeWithImageIO(cgImage: cg, type: .png, quality: nil), "png")
     }
 
     private func renderFinalImage() -> NSImage {
