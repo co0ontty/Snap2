@@ -9,6 +9,7 @@ class StatusBarController {
 
     private var statusItem: NSStatusItem
     private var captureItem: NSMenuItem!
+    private var recordItem: NSMenuItem!
     private var updateItem: NSMenuItem!
 
     /// 自动更新进度窗口，避免被 ARC 提前回收
@@ -86,6 +87,20 @@ class StatusBarController {
         captureItem.image = NSImage(systemSymbolName: "crop", accessibilityDescription: nil)
         menu.addItem(captureItem)
 
+        // 区域录屏
+        let recordHotkeyDisplay = KeyCodeMapping.displayString(
+            keyCode: manager.keyCode(for: .record),
+            carbonModifiers: manager.modifiers(for: .record)
+        )
+        recordItem = NSMenuItem(
+            title: "区域录屏    \(recordHotkeyDisplay)",
+            action: #selector(recordRegion),
+            keyEquivalent: ""
+        )
+        recordItem.target = self
+        recordItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
+        menu.addItem(recordItem)
+
         menu.addItem(NSMenuItem.separator())
 
         // 设置
@@ -147,6 +162,11 @@ class StatusBarController {
         NotificationCenter.default.post(name: .captureRequested, object: nil)
     }
 
+    @objc private func recordRegion() {
+        // 同截图：走 AppDelegate 的权限检查
+        NotificationCenter.default.post(name: .recordingRequested, object: nil)
+    }
+
     @objc private func openSettings() {
         settingsWindowController.showWindow()
     }
@@ -169,6 +189,12 @@ class StatusBarController {
             carbonModifiers: manager.currentModifiers
         )
         captureItem?.title = "区域截图    \(hotkeyDisplay)"
+
+        let recordDisplay = KeyCodeMapping.displayString(
+            keyCode: manager.keyCode(for: .record),
+            carbonModifiers: manager.modifiers(for: .record)
+        )
+        recordItem?.title = "区域录屏    \(recordDisplay)"
     }
 
     // MARK: - 更新检查

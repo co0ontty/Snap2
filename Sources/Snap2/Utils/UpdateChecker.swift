@@ -3,8 +3,9 @@ import Foundation
 /// 通过 GitHub Releases API 检查 Snap² 是否有新版本。
 /// 不依赖 Sparkle 等外部框架，仅用 URLSession + JSONSerialization。
 ///
-/// 使用 /releases/latest 而非 /tags：tags 接口拿不到 release assets，
-/// 自动下载需要 assets[].browser_download_url。
+/// 通道：
+/// - 稳定通道：/releases/latest（GitHub 自动排除 pre-release）
+/// - Beta 通道：/releases?per_page=20 → 取 published_at 最大的非 draft（含 pre-release）
 final class UpdateChecker {
 
     static let shared = UpdateChecker()
@@ -38,9 +39,14 @@ final class UpdateChecker {
         case error(String)
     }
 
-    /// 当前 app 的语义版本（取自 CFBundleShortVersionString）
+    /// 当前 app 的语义版本（取自 CFBundleShortVersionString，可能含 -<commit4> 后缀）
     var currentVersion: String {
         (Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String) ?? "0.0.0"
+    }
+
+    /// 是否订阅 Beta（commit）更新通道
+    var useBetaChannel: Bool {
+        UserDefaults.standard.bool(forKey: UDKey.betaUpdates)
     }
 
     /// 启动时调用：24h 内已查过则跳过。结果通过 .updateAvailable 通知广播。
@@ -64,6 +70,17 @@ final class UpdateChecker {
         }
     }
 
+    /// Beta 通道切换时调用：清理上次"最新版本"缓存，避免旧的 beta 提示在通道关闭后仍残留。
+    func invalidateCacheForChannelChange() {
+        UserDefaults.standard.removeObject(forKey: UDKey.lastUpdateCheckAt)
+        UserDefaults.standard.removeObject(forKey: UDKey.lastKnownLatestVersion)
+        // 让现有 UI（菜单栏角标、设置窗口"升级"胶囊）先回到无更新状态
+        NotificationCenter.default.post(
+            name: .updateNotAvailable,
+            object: Outcome.upToDate(current: currentVersion)
+        )
+    }
+
     // MARK: - 内部
 
     @MainActor
@@ -84,22 +101,52 @@ final class UpdateChecker {
         }
     }
 
-    /// candidate > baseline 时返回 true（语义版本数值比较）
-    static func isVersionNewer(_ candidate: String, than baseline: String) -> Bool {
-        let cv = candidate.split(separator: ".").compactMap { Int($0) }
-        let bv = baseline.split(separator: ".").compactMap { Int($0) }
-        let n = max(cv.count, bv.count)
-        for i in 0..<n {
-            let c = i < cv.count ? cv[i] : 0
-            let b = i < bv.count ? bv[i] : 0
-            if c > b { return true }
-            if c < b { return false }
+    /// 解析后的版本号：数字段 + 可选后缀（commit hash 前 4 位）
+    struct ParsedVersion {
+        let numbers: [Int]
+        let suffix: String?
+
+        static func parse(_ raw: String) -> ParsedVersion {
+            let stripped = raw.hasPrefix("v") ? String(raw.dropFirst()) : raw
+            let parts = stripped.split(separator: "-", maxSplits: 1,
+                                       omittingEmptySubsequences: true)
+            let numPart = parts.first.map(String.init) ?? stripped
+            let nums = numPart.split(separator: ".").compactMap { Int($0) }
+            let sfx: String? = parts.count > 1 ? String(parts[1]) : nil
+            return ParsedVersion(numbers: nums, suffix: sfx)
         }
-        return false
+    }
+
+    /// candidate > baseline 时返回 true。
+    /// 规则：
+    ///   1. 数字段从高位到低位逐位比较；任意一位较大则胜出；
+    ///   2. 数字段全部相同时：
+    ///      - 两边都无后缀 → 同一版本，不更新；
+    ///      - candidate 无后缀、baseline 有后缀 → 稳定版优于同号 beta，可更新（用户从 beta 升到 stable）；
+    ///      - candidate 有后缀、baseline 无后缀 → 仅在 fetch 走 beta 端点时可能命中，视为同号有更新 beta；
+    ///      - 两边都有后缀且不同 → 调用方已挑出"最新候选"，视为可更新。
+    static func isVersionNewer(_ candidate: String, than baseline: String) -> Bool {
+        let c = ParsedVersion.parse(candidate)
+        let b = ParsedVersion.parse(baseline)
+        let n = max(c.numbers.count, b.numbers.count)
+        for i in 0..<n {
+            let cv = i < c.numbers.count ? c.numbers[i] : 0
+            let bv = i < b.numbers.count ? b.numbers[i] : 0
+            if cv > bv { return true }
+            if cv < bv { return false }
+        }
+        switch (c.suffix, b.suffix) {
+        case (nil, nil):       return false
+        case (nil, _?):        return true
+        case (_?, nil):        return true
+        case let (a?, bb?):    return a != bb
+        }
     }
 
     private func fetch() async -> Outcome {
-        guard let url = URL(string: "https://api.github.com/repos/\(repoSlug)/releases/latest") else {
+        let useBeta = useBetaChannel
+        let path = useBeta ? "/releases?per_page=20" : "/releases/latest"
+        guard let url = URL(string: "https://api.github.com/repos/\(repoSlug)\(path)") else {
             return .error("URL 构造失败")
         }
         var request = URLRequest(url: url)
@@ -119,24 +166,44 @@ final class UpdateChecker {
             guard http.statusCode == 200 else {
                 return .error("GitHub 返回 HTTP \(http.statusCode)")
             }
-            guard let obj = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
-                return .error("解析 release 失败")
+            let json = try JSONSerialization.jsonObject(with: data)
+
+            let releaseObj: [String: Any]?
+            if useBeta {
+                guard let arr = json as? [[String: Any]] else {
+                    return .error("解析 release 列表失败")
+                }
+                releaseObj = pickLatestRelease(from: arr)
+            } else {
+                releaseObj = json as? [String: Any]
+            }
+            guard let obj = releaseObj else {
+                return .error("没有可用的 Release")
             }
             guard let parsed = parseRelease(obj) else {
                 return .error("未找到有效版本号")
             }
 
-            switch compare(currentVersion, parsed.semver) {
-            case .orderedAscending:
+            if Self.isVersionNewer(parsed.semver, than: currentVersion) {
                 return .newer(current: currentVersion,
                               latest: parsed.semver,
                               releaseURL: parsed.releaseURL,
                               assets: parsed.assets)
-            default:
-                return .upToDate(current: currentVersion)
             }
+            return .upToDate(current: currentVersion)
         } catch {
             return .error(error.localizedDescription)
+        }
+    }
+
+    /// 从 /releases 列表中挑出"最新"候选：排除 draft，按 published_at 取最大。
+    private func pickLatestRelease(from arr: [[String: Any]]) -> [String: Any]? {
+        let iso = ISO8601DateFormatter()
+        let candidates = arr.filter { ($0["draft"] as? Bool) != true }
+        return candidates.max { a, b in
+            let da = (a["published_at"] as? String).flatMap(iso.date(from:)) ?? .distantPast
+            let db = (b["published_at"] as? String).flatMap(iso.date(from:)) ?? .distantPast
+            return da < db
         }
     }
 
@@ -146,11 +213,13 @@ final class UpdateChecker {
         let assets: ReleaseAssets
     }
 
-    /// 从 /releases/latest 响应中提取版本号、release 页面 URL 与下载资产
+    /// 从单个 release 对象中提取版本号、release 页面 URL 与下载资产
     private func parseRelease(_ obj: [String: Any]) -> ParsedRelease? {
         guard let tagName = obj["tag_name"] as? String else { return nil }
         let stripped = tagName.hasPrefix("v") ? String(tagName.dropFirst()) : tagName
-        guard !stripped.split(separator: ".").compactMap({ Int($0) }).isEmpty else { return nil }
+        // 至少要有一段数字（"1.2.3" 或 "1.2.3-abcd" 都能通过；纯字符串 tag 被拒）
+        let parsed = ParsedVersion.parse(stripped)
+        guard !parsed.numbers.isEmpty else { return nil }
 
         let releaseURL = (obj["html_url"] as? String).flatMap(URL.init(string:))
             ?? URL(string: "https://github.com/\(repoSlug)/releases/tag/\(tagName)")
@@ -208,22 +277,5 @@ final class UpdateChecker {
             assets: ReleaseAssets(zipURL: zipURL, zipSize: zipSize,
                                   dmgURL: dmgURL, dmgSize: dmgSize)
         )
-    }
-
-    private func compare(_ a: String, _ b: String) -> ComparisonResult {
-        let av = a.split(separator: ".").compactMap { Int($0) }
-        let bv = b.split(separator: ".").compactMap { Int($0) }
-        return compareInts(av, bv)
-    }
-
-    private func compareInts(_ a: [Int], _ b: [Int]) -> ComparisonResult {
-        let n = max(a.count, b.count)
-        for i in 0..<n {
-            let av = i < a.count ? a[i] : 0
-            let bv = i < b.count ? b[i] : 0
-            if av < bv { return .orderedAscending }
-            if av > bv { return .orderedDescending }
-        }
-        return .orderedSame
     }
 }

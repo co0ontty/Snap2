@@ -18,6 +18,11 @@ final class CaptureManager {
 
     func startCapture() {
         guard !isCapturing else { return }
+        // 与录屏互斥：录屏正在进行（取景或写盘）期间禁止启动截图，避免视频会话被遮罩干扰
+        guard !RecordingManager.shared.isActive else {
+            NSLog("[CaptureManager] startCapture 被忽略：RecordingManager 正在 active")
+            return
+        }
         isCapturing = true
         NSCursor.crosshair.push()
 

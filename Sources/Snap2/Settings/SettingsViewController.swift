@@ -275,8 +275,24 @@ final class SettingsViewController: NSViewController {
             card2Stack.bottomAnchor.constraint(equalTo: card2.bottomAnchor),
         ])
 
+        // —— 卡片 3: 更新通道 ——
+        let card3 = makeCard(in: parent)
+
+        let betaToggle = NSSwitch()
+        betaToggle.state = defaults.bool(forKey: UDKey.betaUpdates) ? .on : .off
+        betaToggle.target = self
+        betaToggle.action = #selector(betaUpdatesChanged(_:))
+        let row3 = makeRow(label: "更新 Beta 版本", control: betaToggle)
+        card3.addSubview(row3)
+        NSLayoutConstraint.activate([
+            row3.topAnchor.constraint(equalTo: card3.topAnchor),
+            row3.leadingAnchor.constraint(equalTo: card3.leadingAnchor),
+            row3.trailingAnchor.constraint(equalTo: card3.trailingAnchor),
+            row3.bottomAnchor.constraint(equalTo: card3.bottomAnchor),
+        ])
+
         // —— 整体布局 ——
-        let mainStack = NSStackView(views: [card1, card2])
+        let mainStack = NSStackView(views: [card1, card2, card3])
         mainStack.orientation = .vertical
         mainStack.spacing = 14
         mainStack.alignment = .leading
@@ -575,6 +591,17 @@ final class SettingsViewController: NSViewController {
     @objc private func enterActionChanged(_ sender: NSPopUpButton) {
         let action: EnterAction = sender.indexOfSelectedItem == 1 ? .save : .copy
         UserDefaults.standard.set(action.rawValue, forKey: UDKey.enterAction)
+    }
+
+    @objc private func betaUpdatesChanged(_ sender: NSSwitch) {
+        let enabled = sender.state == .on
+        UserDefaults.standard.set(enabled, forKey: UDKey.betaUpdates)
+        NotificationCenter.default.post(name: .betaChannelChanged, object: nil)
+        // 通道变化后立刻按新通道拉一次：覆盖菜单栏角标 / 设置窗口"升级"胶囊的旧缓存
+        UpdateChecker.shared.invalidateCacheForChannelChange()
+        UpdateChecker.shared.checkManually { _ in
+            // alert 流程交给菜单栏控制器（监听 .updateAvailable）；此处只触发拉取
+        }
     }
 
     private func hotkeyDidRecord(keyCode: UInt32, modifiers: NSEvent.ModifierFlags) {

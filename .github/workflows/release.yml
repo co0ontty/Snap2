@@ -4,6 +4,9 @@ on:
   push:
     tags:
       - 'v*'
+      - '!v*-*'        # beta tag 由 workflow 自身创建，避免回环触发
+    branches:
+      - main
   workflow_dispatch: {}
 
 permissions:
@@ -21,6 +24,30 @@ jobs:
           # 完整 git 历史，给后续步骤用 git rev-list 计算构建号
           fetch-depth: 0
 
+      - name: Compute version & channel
+        id: ver
+        run: |
+          set -euo pipefail
+          if [[ "$GITHUB_REF" == refs/tags/v* ]]; then
+            # 正式 tag 构建
+            RELEASE_TAG="$GITHUB_REF_NAME"
+            VERSION="${RELEASE_TAG#v}"
+            IS_BETA=false
+          else
+            # main 推送或手动触发 → Beta 通道
+            # 最近一个 *稳定* tag（不含 '-'）作为版本基底
+            LATEST_TAG="$(git tag --list 'v*' --sort=-v:refname | grep -vE '-' | head -n1 || true)"
+            LATEST_TAG="${LATEST_TAG:-v0.0.0}"
+            SHORT="$(git rev-parse --short=4 HEAD)"
+            VERSION="${LATEST_TAG#v}-${SHORT}"
+            RELEASE_TAG="v${VERSION}"
+            IS_BETA=true
+          fi
+          echo "version=$VERSION"         >> "$GITHUB_OUTPUT"
+          echo "release_tag=$RELEASE_TAG" >> "$GITHUB_OUTPUT"
+          echo "is_beta=$IS_BETA"         >> "$GITHUB_OUTPUT"
+          echo "→ version=$VERSION release_tag=$RELEASE_TAG is_beta=$IS_BETA"
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -35,30 +62,27 @@ jobs:
           xcodebuild -version
           swift --version
 
-      - name: Sync Info.plist version from tag
-        if: startsWith(github.ref, 'refs/tags/')
+      - name: Sync Info.plist version
         run: |
           set -euo pipefail
-          # 'vX.Y.Z' → 'X.Y.Z'
-          TAG_VERSION="${GITHUB_REF_NAME#v}"
+          VERSION="${{ steps.ver.outputs.version }}"
           # 单调递增的构建号；commit 总数从远古到 HEAD
           BUILD_NUM="$(git rev-list --count HEAD)"
           PLIST="Resources/Info.plist"
 
           CUR_SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
           CUR_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
-          echo "Tag           : $GITHUB_REF_NAME (→ $TAG_VERSION)"
           echo "Info.plist 旧 : short=$CUR_SHORT build=$CUR_BUILD"
-          echo "Info.plist 新 : short=$TAG_VERSION build=$BUILD_NUM"
+          echo "Info.plist 新 : short=$VERSION build=$BUILD_NUM"
 
-          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $TAG_VERSION" "$PLIST"
+          /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $VERSION" "$PLIST"
           /usr/libexec/PlistBuddy -c "Set :CFBundleVersion $BUILD_NUM" "$PLIST"
 
           # 验证
           NEW_SHORT="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleShortVersionString' "$PLIST")"
           NEW_BUILD="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleVersion' "$PLIST")"
-          [[ "$NEW_SHORT" == "$TAG_VERSION" ]] || { echo "短版本号同步失败"; exit 1; }
-          [[ "$NEW_BUILD" == "$BUILD_NUM" ]]  || { echo "构建号同步失败"; exit 1; }
+          [[ "$NEW_SHORT" == "$VERSION" ]]   || { echo "短版本号同步失败"; exit 1; }
+          [[ "$NEW_BUILD" == "$BUILD_NUM" ]] || { echo "构建号同步失败"; exit 1; }
 
       - name: Import self-signed code signing certificate
         id: import_cert
@@ -122,15 +146,17 @@ jobs:
           shasum -a 256 Snap2-arm64.dmg Snap2-x86_64.dmg Snap2.zip
 
       - name: Upload DMGs + ZIP to Release
-        if: startsWith(github.ref, 'refs/tags/')
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ steps.ver.outputs.release_tag }}
+          name: ${{ steps.ver.outputs.release_tag }}
+          prerelease: ${{ steps.ver.outputs.is_beta }}
+          generate_release_notes: ${{ steps.ver.outputs.is_beta == 'false' }}
           files: |
             Snap2-arm64.dmg
             Snap2-x86_64.dmg
             Snap2.zip
-          name: ${{ github.ref_name }}
-          generate_release_notes: true
           fail_on_unmatched_files: true
 
       - name: Upload artifacts (manual runs)
