@@ -7,7 +7,8 @@ import UniformTypeIdentifiers
 ///   1. .selecting — 用户拖拽创建选区
 ///   2. .annotating — 选区已捕获，绘制标注
 ///
-/// 不同于旧版：松手即进入标注，无确认步骤。
+/// 不同于旧版：松手即进入标注，无确认步骤。进入标注后仍可微调选区——
+/// 角/边小圆点拖拽 resize，选区外侧 12px 一圈拖拽 move（光标会变 openHand 提示）。
 final class SelectionView: NSView {
 
     // MARK: - 状态
@@ -66,6 +67,26 @@ final class SelectionView: NSView {
     private let pinHandleInset: CGFloat = 6
     /// 鼠标是否悬停在拖动手柄上：决定手柄绘制透明度
     private var isPinHandleHovered: Bool = false
+
+    // 标注模式下调整选区位置/大小
+    // 设计：保留团队 "松手即进入标注" 的 fast path 不变，只在标注模式里追加可调能力——
+    //   resize：8 个小尺寸控制点（角 + 边中点）
+    //   move  ：选区外侧 12px 隐形 ring（光标变 openHand 提示可拖）
+    // 选区改变后，从 frozenCGImage 重新裁 capturedCGImage，让最终输出与新选区一致。
+    private enum SelectionAdjust {
+        case resizing(Int)  // 0..7，与 handleRects 编号一致
+        case moving
+    }
+    private var selectionAdjust: SelectionAdjust?
+    /// move 时鼠标相对 selectionRect.origin 的偏移。
+    /// resize 复用 .selecting 模式的 resizeAnchor 属性（两模式 anchor 语义相同，
+    /// 且不会同时活跃，可安全共用以避免 applyResize 跨字段读取）。
+    private var selectionAdjustMoveOffset: NSPoint = .zero
+    /// move ring 宽度（在选区外侧）
+    private let annotationMoveRingWidth: CGFloat = 12
+    /// 标注模式下的小型 resize 控制点尺寸（圆点直径）和命中扩展
+    private let annotationHandleSize: CGFloat = 8
+    private let annotationHandleHitPad: CGFloat = 6
 
     // MARK: - 视图设置
 
@@ -198,6 +219,80 @@ final class SelectionView: NSView {
         context.setLineWidth(1.5)
         context.stroke(selectionRect)
         context.restoreGState()
+
+        drawAnnotationResizeHandles(in: context)
+    }
+
+    /// 标注模式下的小型 resize 控制点：白色小圆点 + 1px 强调色描边。
+    /// 故意比 .selecting 模式的 9px 大手柄更克制，避免在画注释时喧宾夺主。
+    /// editPin 路径无 frozenCGImage，resize 会导致 NSImage.draw 缩放变形——故隐藏控制点。
+    private func drawAnnotationResizeHandles(in context: CGContext) {
+        guard !isDraggingPin, frozenCGImage != nil else { return }
+        let rects = annotationResizeHandleRects
+        guard !rects.isEmpty else { return }
+
+        context.saveGState()
+        for r in rects {
+            let path = CGPath(ellipseIn: r, transform: nil)
+            // 阴影让圆点在任意背景上都看得见，但比 .selecting 手柄更浅
+            context.setShadow(offset: CGSize(width: 0, height: -1), blur: 1.5,
+                              color: NSColor.black.withAlphaComponent(0.35).cgColor)
+            context.addPath(path)
+            NSColor.white.setFill()
+            context.fillPath()
+            context.setShadow(offset: .zero, blur: 0, color: nil)
+
+            context.addPath(path)
+            NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
+            context.setLineWidth(1.0)
+            context.strokePath()
+        }
+        context.restoreGState()
+    }
+
+    /// 标注模式下的 8 个 resize 控制点位置。
+    /// 编号与 .selecting 模式的 handleRects 完全一致，复用 applyResize / anchorForHandle。
+    /// 选区过小（容纳不下手柄）时返回空数组，避免视觉拥挤。
+    private var annotationResizeHandleRects: [NSRect] {
+        guard mode == .annotating, frozenCGImage != nil,
+              selectionRect.width > annotationHandleSize * 3,
+              selectionRect.height > annotationHandleSize * 3 else { return [] }
+        let r = selectionRect
+        let s = annotationHandleSize
+        let half = s / 2
+        return [
+            NSRect(x: r.minX - half, y: r.maxY - half, width: s, height: s), // 0 TL
+            NSRect(x: r.maxX - half, y: r.maxY - half, width: s, height: s), // 1 TR
+            NSRect(x: r.maxX - half, y: r.minY - half, width: s, height: s), // 2 BR
+            NSRect(x: r.minX - half, y: r.minY - half, width: s, height: s), // 3 BL
+            NSRect(x: r.midX - half, y: r.maxY - half, width: s, height: s), // 4 T
+            NSRect(x: r.maxX - half, y: r.midY - half, width: s, height: s), // 5 R
+            NSRect(x: r.midX - half, y: r.minY - half, width: s, height: s), // 6 B
+            NSRect(x: r.minX - half, y: r.midY - half, width: s, height: s), // 7 L
+        ]
+    }
+
+    /// 命中测试：返回点击到了哪个 resize 控制点（0..7），否则返回 nil。
+    /// 已加上 hit-pad，比视觉尺寸更宽容。
+    private func hitTestAnnotationHandle(_ p: NSPoint) -> Int? {
+        for (i, h) in annotationResizeHandleRects.enumerated() {
+            if h.insetBy(dx: -annotationHandleHitPad, dy: -annotationHandleHitPad).contains(p) {
+                return i
+            }
+        }
+        return nil
+    }
+
+    /// 命中测试：点是否落在"选区外侧 ring"（move 区）。
+    /// 必须 ① 不在选区内 ② 在选区外侧 ring 内 ③ 没有被 resize 控制点抢先命中。
+    /// editPin 模式下 frozenCGImage 为空，也允许 move（capturedImage 会跟随 selectionRect 走）。
+    private func hitTestAnnotationMoveRing(_ p: NSPoint) -> Bool {
+        guard selectionRect.width > 0, selectionRect.height > 0 else { return false }
+        if selectionRect.contains(p) { return false }
+        let outer = selectionRect.insetBy(dx: -annotationMoveRingWidth, dy: -annotationMoveRingWidth)
+        if !outer.contains(p) { return false }
+        if hitTestAnnotationHandle(p) != nil { return false }
+        return true
     }
 
     /// 选区左上角的拖动手柄（三横线 ≡）。用户从这里拖出去即新建桌面钉图。
@@ -624,6 +719,31 @@ final class SelectionView: NSView {
             return
         }
 
+        // 命中 resize 控制点 → 调整选区大小（顺序：先于 move ring，hit-pad 已覆盖角点附近）
+        if let idx = hitTestAnnotationHandle(p) {
+            selectionAdjust = .resizing(idx)
+            resizeAnchor = anchorForHandle(idx)  // applyResize 直接读取此字段
+            // 编辑期间隐藏工具栏避免遮挡 + 联动浮窗的尺寸徽章
+            removeToolbar()
+            showSizeBadge()
+            updateSizeBadge()
+            return
+        }
+
+        // 命中外侧 move ring → 移动整个选区（选区内部仍为标注绘制保留）
+        if hitTestAnnotationMoveRing(p) {
+            selectionAdjust = .moving
+            selectionAdjustMoveOffset = NSPoint(
+                x: p.x - selectionRect.origin.x,
+                y: p.y - selectionRect.origin.y
+            )
+            NSCursor.closedHand.set()
+            removeToolbar()
+            showSizeBadge()
+            updateSizeBadge()
+            return
+        }
+
         guard selectionRect.contains(p) else { return }
         let local = NSPoint(x: p.x - selectionRect.origin.x,
                             y: p.y - selectionRect.origin.y)
@@ -655,6 +775,26 @@ final class SelectionView: NSView {
             return
         }
 
+        if let adjust = selectionAdjust {
+            switch adjust {
+            case .resizing(let idx):
+                applyResize(handleIndex: idx, point: p)
+            case .moving:
+                var origin = NSPoint(
+                    x: p.x - selectionAdjustMoveOffset.x,
+                    y: p.y - selectionAdjustMoveOffset.y
+                )
+                // clamp 到 bounds，避免选区被拖出屏幕外不可恢复
+                origin.x = max(0, min(origin.x, bounds.width - selectionRect.width))
+                origin.y = max(0, min(origin.y, bounds.height - selectionRect.height))
+                selectionRect.origin = origin
+            }
+            updateSizeBadge()
+            needsDisplay = true
+            window?.invalidateCursorRects(for: self)
+            return
+        }
+
         guard let el = currentElement else { return }
         let local = NSPoint(x: p.x - selectionRect.origin.x,
                             y: p.y - selectionRect.origin.y)
@@ -666,6 +806,11 @@ final class SelectionView: NSView {
     private func handleAnnotationMouseUp(p: NSPoint) {
         if isDraggingPin {
             commitPinDrag(at: p)
+            return
+        }
+
+        if selectionAdjust != nil {
+            commitSelectionAdjust()
             return
         }
 
@@ -681,6 +826,34 @@ final class SelectionView: NSView {
         }
         currentElement = nil
         needsDisplay = true
+    }
+
+    /// 标注模式下 resize / move 结束：
+    /// 1. 用新 selectionRect 从 frozenCGImage 重新裁出 capturedCGImage（高分原图）
+    /// 2. 失效 mosaicCache（源图变了，旧像素化样本不能再用）
+    /// 3. 重排玻璃工具栏到新选区下方
+    /// editPin 路径无 frozenCGImage——这条路径里只允许 move（resize 控制点被隐藏），
+    /// 且 capturedImage 会在 draw 阶段按当前 selectionRect 自动跟随，无需重裁。
+    private func commitSelectionAdjust() {
+        selectionAdjust = nil
+        hideSizeBadge()
+
+        if let frozenCG = frozenCGImage,
+           let frozenSize = frozenImage?.size,
+           let cropped = cropFrozenCGImage(frozenCG, frozenPointSize: frozenSize, to: selectionRect) {
+            capturedCGImage = cropped.cgImage
+            capturedImage = NSImage(cgImage: cropped.cgImage, size: cropped.pointSize)
+            mosaicCache.removeAll()
+        }
+        // editPin 路径（frozenCGImage == nil）此处不重裁——capturedImage 在 draw() 里按
+        // selectionRect 跟随，move 视觉一致；resize 控制点已被 drawAnnotationResizeHandles
+        // 隐藏，因此到这里 selectionAdjust 必然是 .moving，不会出现 capturedImage 被拉伸的情况。
+
+        showAnnotationToolbar()
+        needsDisplay = true
+        // 释放后鼠标可能停在 move ring / resize 控制点上，下一次 mouseMoved 会自动按新
+        // cursor rect 切换光标；这里只 invalidate 让 AppKit 重新评估即可，不主动 set。
+        window?.invalidateCursorRects(for: self)
     }
 
     /// 拖动手柄落点：以最终位置创建 PinnedImageWindow，关闭整个截图会话。
@@ -1207,11 +1380,43 @@ final class SelectionView: NSView {
             }
             addCursorRect(bounds, cursor: .crosshair)
         } else {
-            addCursorRect(selectionRect, cursor: .crosshair)
-            // 拖动手柄区域：抓握光标提示可拖
+            // 标注模式：cursor rect 注册顺序 = 先具体后宽泛（与 .selecting 模式同语义，
+            // AppKit 在多个重叠 rect 命中时取先注册者）。
+
+            // 1. 钉图拖动手柄：最高优先级
             if let h = pinHandleRect() {
                 addCursorRect(h, cursor: .openHand)
             }
+
+            // 2. resize 控制点：用方向感更明确的 resize 光标盖到圆点 hit-pad 区域
+            let resizeCursors: [NSCursor] = [
+                .resizeUpDown, .resizeUpDown, .resizeUpDown, .resizeUpDown,  // 4 角统一用上下，AppKit 没有公开斜向光标
+                .resizeUpDown, .resizeLeftRight, .resizeUpDown, .resizeLeftRight  // T R B L
+            ]
+            for (i, h) in annotationResizeHandleRects.enumerated() {
+                addCursorRect(h.insetBy(dx: -annotationHandleHitPad, dy: -annotationHandleHitPad),
+                              cursor: resizeCursors[i])
+            }
+
+            // 3. 外侧 move ring：openHand 提示可拖动整个选区
+            if selectionRect.width > 0, selectionRect.height > 0 {
+                let outer = selectionRect.insetBy(dx: -annotationMoveRingWidth, dy: -annotationMoveRingWidth)
+                // ring 形区域用 4 条矩形拼出来（顶/底/左/右）
+                let top = NSRect(x: outer.minX, y: selectionRect.maxY,
+                                 width: outer.width, height: outer.maxY - selectionRect.maxY)
+                let bottom = NSRect(x: outer.minX, y: outer.minY,
+                                    width: outer.width, height: selectionRect.minY - outer.minY)
+                let left = NSRect(x: outer.minX, y: selectionRect.minY,
+                                  width: selectionRect.minX - outer.minX, height: selectionRect.height)
+                let right = NSRect(x: selectionRect.maxX, y: selectionRect.minY,
+                                   width: outer.maxX - selectionRect.maxX, height: selectionRect.height)
+                for r in [top, bottom, left, right] where r.width > 0 && r.height > 0 {
+                    addCursorRect(r, cursor: .openHand)
+                }
+            }
+
+            // 4. 选区内部：绘制 crosshair（兜底）
+            addCursorRect(selectionRect, cursor: .crosshair)
         }
     }
 }
