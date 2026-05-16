@@ -69,6 +69,15 @@ final class PinnedImageWindow: NSPanel {
         collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .stationary]
         ignoresMouseEvents = false
 
+        // 强制 P3 色彩空间：内部 NSImage 是 Display P3，若 window.colorSpace 留空，
+        // AppKit 会在窗口创建瞬间替我们挑一个"最合适"的 backing colorspace——这个
+        // 选择并不确定，受当前主屏 / 创建时序 / 显示器拓扑等影响，有时会落到 sRGB。
+        // 一旦 backing 是 sRGB，P3 像素在合成时被 gamut-clip 到 sRGB 再回到 P3
+        // 显示器，饱和色就会肉眼可见地变暗变灰。切换窗口焦点之所以"有概率"恢复，
+        // 是因为 windowDidChangeBackingProperties 触发了一次重新评估，恰好落到了 P3。
+        // 显式锁死 P3 后，这条不确定路径被消除，颜色始终与屏幕一致。
+        colorSpace = NSColorSpace.displayP3
+
         // 圆角容器 + 极轻 1px 描边
         let host = NSView(frame: NSRect(origin: .zero, size: size))
         host.wantsLayer = true

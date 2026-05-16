@@ -24,6 +24,13 @@ final class GlassPanel: NSPanel {
         becomesKeyOnlyIfNeeded = true
         ignoresMouseEvents = false
 
+        // 强制 P3 色彩空间：CopyToast 会在面板里展示截图缩略图（NSImage 自带 P3 ICC），
+        // 若 window.colorSpace 留空，AppKit 在窗口创建时挑的 backing colorspace 是
+        // 非确定性的，部分时刻会落到 sRGB——P3 像素被 gamut-clip 到 sRGB 再回到 P3
+        // 显示器时，饱和色明显发暗发灰。锁死 displayP3 让 toast 与原始截图色一致；
+        // 即便后续用于其它非缩略图场景（工具栏 / 尺寸徽章），P3 也对纯色 UI 无害。
+        colorSpace = NSColorSpace.displayP3
+
         // 玻璃容器铺满
         let host = NSView(frame: NSRect(origin: .zero, size: size))
         host.wantsLayer = true
