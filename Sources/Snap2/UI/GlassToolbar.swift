@@ -8,6 +8,7 @@ protocol GlassToolbarDelegate: AnyObject {
     func toolbarDidTapSave()
     func toolbarDidTapCopy()
     func toolbarDidTapPin()
+    func toolbarDidTapRecord()
     func toolbarDidTapClose()
 }
 
@@ -132,6 +133,7 @@ final class GlassToolbar: NSView {
             ("square.and.arrow.down", "保存 (⌘S)", #selector(saveTapped)),
             ("doc.on.clipboard", "复制 (↩)", #selector(copyTapped)),
             ("pin.fill", "钉在桌面 (⌘P)", #selector(pinTapped)),
+            ("record.circle", "录制选区", #selector(recordTapped)),
         ]
         for (sym, tip, sel) in actions {
             let b = GlassButton(symbol: sym, size: Glass.buttonSize, tooltip: tip)
@@ -201,11 +203,12 @@ final class GlassToolbar: NSView {
 
     // 操作类按钮异步派发：避免在 NSButton mouseDown tracking loop 内拆掉父面板，
     // 导致后续状态更新落到已 orderOut 的窗口、动作"无反应"。
-    @objc private func undoTapped()  { dispatchAction { $0.toolbarDidTapUndo() } }
-    @objc private func saveTapped()  { dispatchAction { $0.toolbarDidTapSave() } }
-    @objc private func copyTapped()  { dispatchAction { $0.toolbarDidTapCopy() } }
-    @objc private func pinTapped()   { dispatchAction { $0.toolbarDidTapPin() } }
-    @objc private func closeTapped() { dispatchAction { $0.toolbarDidTapClose() } }
+    @objc private func undoTapped()   { dispatchAction { $0.toolbarDidTapUndo() } }
+    @objc private func saveTapped()   { dispatchAction { $0.toolbarDidTapSave() } }
+    @objc private func copyTapped()   { dispatchAction { $0.toolbarDidTapCopy() } }
+    @objc private func pinTapped()    { dispatchAction { $0.toolbarDidTapPin() } }
+    @objc private func recordTapped() { dispatchAction { $0.toolbarDidTapRecord() } }
+    @objc private func closeTapped()  { dispatchAction { $0.toolbarDidTapClose() } }
 
     private func dispatchAction(_ block: @escaping (GlassToolbarDelegate) -> Void) {
         DispatchQueue.main.async { [weak self] in
@@ -219,7 +222,7 @@ final class GlassToolbar: NSView {
         let toolsCount = AnnotationToolType.allCases.count
         let colorsCount = AnnotationPalette.colors.count
         let widthsCount = LineWidthLevel.allCases.count
-        let actionsCount = 5  // undo / save / copy / pin / close
+        let actionsCount = 6  // undo / save / copy / pin / record / close
         let separatorsCount = 3 // 工具｜颜色｜线宽｜操作
 
         let toolsW = CGFloat(toolsCount) * Glass.buttonSize

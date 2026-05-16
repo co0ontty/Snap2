@@ -1437,6 +1437,7 @@ extension SelectionView: GlassToolbarDelegate {
     func toolbarDidTapSave() { performSave() }
     func toolbarDidTapCopy() { copyAndClose() }
     func toolbarDidTapPin()  { performPinAtSelection() }
+    func toolbarDidTapRecord() { performRecordSelection() }
     func toolbarDidTapClose() { CaptureManager.shared.cancelCapture() }
 
     /// 工具栏点击或 ⌘P 触发：在选区原位置创建一张钉图，并结束本次截图会话
@@ -1449,6 +1450,22 @@ extension SelectionView: GlassToolbarDelegate {
         )
         PinnedImageWindow.show(image: image, at: screenOrigin)
         CaptureManager.shared.finishAndClose()
+    }
+
+    /// 工具栏录制按钮：把当前选区交给 RecordingManager 直接录屏，
+    /// 期间标注不会被保留（视频只录原始画面）。
+    private func performRecordSelection() {
+        guard mode == .annotating else { return }
+        // 用 OverlayWindow.targetScreen 而不是 window?.screen——后者在 overlay 拆解期间可能瞬时返回 nil
+        let screen: NSScreen? = (window as? OverlayWindow)?.targetScreen ?? window?.screen
+        guard let screen = screen else { return }
+        // 捕获 rect / screen 后再拆 overlay，避免拆窗后丢失关联
+        let rect = selectionRect
+        CaptureManager.shared.finishAndClose()
+        // 派发到下一轮 runloop：让 overlay orderOut 完成、SCStream 旧会话释放后再启动新流
+        DispatchQueue.main.async {
+            RecordingManager.shared.startRecordingForRegion(rect, on: screen)
+        }
     }
 }
 

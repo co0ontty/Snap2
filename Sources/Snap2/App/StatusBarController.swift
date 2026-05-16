@@ -12,6 +12,13 @@ class StatusBarController {
     private var recordItem: NSMenuItem!
     private var updateItem: NSMenuItem!
 
+    /// 录制中的"快捷操作"附加状态项：左边时长 label，右边停止按钮
+    /// 不挂菜单，点击直接派发 .recordingStopRequested。
+    private var recordingTimerItem: NSStatusItem?
+    private var recordingStopItem: NSStatusItem?
+    private var recordingTimer: Timer?
+    private var recordingStartedAt: Date?
+
     /// 自动更新进度窗口，避免被 ARC 提前回收
     private var updateProgressWindow: UpdateProgressWindow?
 
@@ -45,26 +52,56 @@ class StatusBarController {
             name: .updateCheckRequested,
             object: nil
         )
+        // 录制开始 / 结束 → 切换菜单栏图标 + 插拔"快捷操作"按钮
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRecordingStarted(_:)),
+            name: .recordingStarted,
+            object: nil
+        )
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(handleRecordingFinished(_:)),
+            name: .recordingFinished,
+            object: nil
+        )
     }
 
     deinit {
+        recordingTimer?.invalidate()
         NotificationCenter.default.removeObserver(self)
     }
 
     // MARK: - 配置
 
     private func setupButton() {
-        guard let button = statusItem.button else { return }
+        applyIdleAppearance()
+    }
 
-        // 优先用 cat.fill（macOS 14+ SF Symbol，呼应"初二"），不可用时回退到 camera.viewfinder
+    /// 闲置态：cat.fill 图标 + 默认 tint
+    private func applyIdleAppearance() {
+        guard let button = statusItem.button else { return }
         let symbol = NSImage(systemSymbolName: "cat.fill", accessibilityDescription: "Snap² 截图")
             ?? NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: "Snap² 截图")
         if let image = symbol {
             image.isTemplate = true
             button.image = image
         }
-
+        button.contentTintColor = nil
         button.toolTip = "Snap² · 截图工具"
+    }
+
+    /// 录制态：record.circle.fill 红色，配合呼吸感（菜单栏不支持图层动画，这里只换图标即可）
+    private func applyRecordingAppearance() {
+        guard let button = statusItem.button else { return }
+        let symbol = NSImage(systemSymbolName: "record.circle.fill",
+                             accessibilityDescription: "Snap² 正在录屏")
+        if let image = symbol {
+            image.isTemplate = true
+            button.image = image
+        }
+        button.contentTintColor = .systemRed
+        button.toolTip = "Snap² · 正在录屏（点击展开）"
     }
 
     private func setupMenu() {
@@ -362,5 +399,112 @@ class StatusBarController {
         updateItem?.image = NSImage(systemSymbolName: "arrow.down.circle.fill",
                                     accessibilityDescription: nil)
         statusItem.button?.toolTip = "Snap² · 新版本 v\(latestVersion) 可用"
+    }
+
+    // MARK: - 录制中的菜单栏快捷操作
+
+    @objc private func handleRecordingStarted(_ note: Notification) {
+        applyRecordingAppearance()
+        installRecordingQuickActions()
+        updateMenuForRecording(true)
+    }
+
+    @objc private func handleRecordingFinished(_ note: Notification) {
+        applyIdleAppearance()
+        removeRecordingQuickActions()
+        updateMenuForRecording(false)
+    }
+
+    /// 在主图标右侧追加两个 NSStatusItem：时长 label + 停止按钮。
+    /// 不挂菜单，点击直接发出 .recordingStopRequested 由 RecordingManager 接管。
+    private func installRecordingQuickActions() {
+        removeRecordingQuickActions()  // 防御性：重入时先清掉
+
+        // 时长 label（variableLength：宽度跟随 title）
+        let timer = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let btn = timer.button {
+            btn.title = "00:00"
+            btn.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .medium)
+            btn.contentTintColor = .systemRed
+            btn.toolTip = "Snap² · 录制时长"
+        }
+        recordingTimerItem = timer
+
+        // 停止按钮
+        let stop = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
+        if let btn = stop.button {
+            let img = NSImage(systemSymbolName: "stop.circle.fill",
+                              accessibilityDescription: "停止录屏")
+            img?.isTemplate = true
+            btn.image = img
+            btn.contentTintColor = .systemRed
+            btn.toolTip = "停止录屏"
+            btn.target = self
+            btn.action = #selector(stopRecordingFromStatusBar)
+        }
+        recordingStopItem = stop
+
+        // 启动 1Hz 计时器更新时长
+        recordingStartedAt = Date()
+        recordingTimer?.invalidate()
+        let t = Timer(timeInterval: 1.0, repeats: true) { [weak self] _ in
+            self?.tickRecordingTimer()
+        }
+        RunLoop.main.add(t, forMode: .common)
+        recordingTimer = t
+        tickRecordingTimer()  // 立即刷一次到 00:00
+    }
+
+    private func removeRecordingQuickActions() {
+        recordingTimer?.invalidate()
+        recordingTimer = nil
+        recordingStartedAt = nil
+        if let item = recordingTimerItem {
+            NSStatusBar.system.removeStatusItem(item)
+        }
+        if let item = recordingStopItem {
+            NSStatusBar.system.removeStatusItem(item)
+        }
+        recordingTimerItem = nil
+        recordingStopItem = nil
+    }
+
+    private func tickRecordingTimer() {
+        guard let start = recordingStartedAt else { return }
+        let elapsed = Int(Date().timeIntervalSince(start))
+        let h = elapsed / 3600
+        let m = (elapsed % 3600) / 60
+        let s = elapsed % 60
+        let text = h > 0
+            ? String(format: "%d:%02d:%02d", h, m, s)
+            : String(format: "%02d:%02d", m, s)
+        recordingTimerItem?.button?.title = text
+        // 录制中也更新 record 菜单条目里的时长（如果当前是 "停止录屏" 状态）
+        if recordItem?.title.hasPrefix("停止录屏") == true {
+            recordItem.title = "停止录屏 \(text)"
+        }
+    }
+
+    @objc private func stopRecordingFromStatusBar() {
+        // 与控制面板停止按钮、⌃⇧R 二次触发走同一路径
+        NotificationCenter.default.post(name: .recordingStopRequested, object: nil)
+    }
+
+    /// 录制中：截图条目禁用、录制条目变 "停止录屏"。
+    /// 结束：复原默认显示（带快捷键 hint）。
+    private func updateMenuForRecording(_ recording: Bool) {
+        if recording {
+            captureItem?.isEnabled = false
+            captureItem?.title = "区域截图（录屏进行中）"
+            recordItem?.image = NSImage(systemSymbolName: "stop.circle.fill",
+                                        accessibilityDescription: nil)
+            recordItem?.title = "停止录屏 00:00"
+        } else {
+            captureItem?.isEnabled = true
+            recordItem?.image = NSImage(systemSymbolName: "record.circle",
+                                        accessibilityDescription: nil)
+            // 复原显示（带最新的快捷键文案）
+            updateCaptureShortcutDisplay()
+        }
     }
 }

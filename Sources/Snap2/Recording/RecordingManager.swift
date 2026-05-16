@@ -87,6 +87,22 @@ final class RecordingManager: NSObject {
         overlayWindows.first?.makeKey()
     }
 
+    /// 跳过取景阶段，直接以外部已确定的选区开始录屏。
+    /// 用于"截图框选后切到录屏"的快捷路径——调用方需保证：
+    ///   - 自己已经把任何持有屏幕的截图 overlay 关闭（避免被录进 SCStream）
+    ///   - rect 是 *overlay 视图坐标* / `screen` 是 rect 所在屏（与 RecordingSelectionView 同义）
+    func startRecordingForRegion(_ rect: NSRect, on screen: NSScreen) {
+        guard state == .idle else { return }
+        guard !CaptureManager.shared.isCapturing else {
+            NSLog("[RecordingManager] startRecordingForRegion 被忽略：CaptureManager 仍在截图")
+            return
+        }
+        // beginRecording 期望 state == .pickingRegion 才会真正启动；
+        // 这里手动满足前置条件，复用相同的"取景确认 → 启动 SCStream"路径。
+        state = .pickingRegion
+        beginRecording(selectionInView: rect, screen: screen)
+    }
+
     private func closeAllOverlays() {
         NSCursor.pop()
         for w in overlayWindows {

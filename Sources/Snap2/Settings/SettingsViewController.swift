@@ -32,9 +32,8 @@ final class SettingsViewController: NSViewController {
     private var qualityValueLabel: NSTextField?
     private var qualityCard: NSView?
 
-    // 快捷键设置控件
-    private var hotkeyRecorderView: HotkeyRecorderView?
-    private var hotkeyDisplayLabel: NSTextField?
+    // 快捷键设置控件（按 Action 索引，方便重置时刷新对应行）
+    private var hotkeyRecorderViews: [HotkeyManager.Action: HotkeyRecorderView] = [:]
 
     init(settingsType: SettingsType) {
         self.settingsType = settingsType
@@ -309,78 +308,13 @@ final class SettingsViewController: NSViewController {
     // MARK: - 快捷键设置
 
     private func setupHotkeySettings(in parent: NSView) {
-        let manager = HotkeyManager.shared
-        let currentDisplay = KeyCodeMapping.displayString(
-            keyCode: manager.currentKeyCode,
-            carbonModifiers: manager.currentModifiers
-        )
-
-        // 大显示卡
-        let displayCard = makeCard(in: parent, height: 110)
-
-        let bigDisplay = NSTextField(labelWithString: currentDisplay)
-        bigDisplay.font = NSFont.monospacedSystemFont(ofSize: 28, weight: .medium)
-        bigDisplay.textColor = NSColor.white
-        bigDisplay.backgroundColor = .clear
-        bigDisplay.alignment = .center
-        bigDisplay.translatesAutoresizingMaskIntoConstraints = false
-        hotkeyDisplayLabel = bigDisplay
-
-        let displayHint = NSTextField(labelWithString: "当前快捷键")
-        displayHint.font = NSFont.systemFont(ofSize: 11)
-        displayHint.textColor = NSColor.white.withAlphaComponent(0.50)
-        displayHint.backgroundColor = .clear
-        displayHint.alignment = .center
-        displayHint.translatesAutoresizingMaskIntoConstraints = false
-
-        displayCard.addSubview(displayHint)
-        displayCard.addSubview(bigDisplay)
-
-        NSLayoutConstraint.activate([
-            displayHint.topAnchor.constraint(equalTo: displayCard.topAnchor, constant: 18),
-            displayHint.centerXAnchor.constraint(equalTo: displayCard.centerXAnchor),
-            bigDisplay.topAnchor.constraint(equalTo: displayHint.bottomAnchor, constant: 6),
-            bigDisplay.centerXAnchor.constraint(equalTo: displayCard.centerXAnchor),
-        ])
-
-        // 录制 + 重置卡
-        let recordCard = makeCard(in: parent)
-
-        let recorder = HotkeyRecorderView(frame: NSRect(x: 0, y: 0, width: 240, height: 36))
-        recorder.translatesAutoresizingMaskIntoConstraints = false
-        recorder.widthAnchor.constraint(equalToConstant: 240).isActive = true
-        recorder.heightAnchor.constraint(equalToConstant: 32).isActive = true
-        recorder.onHotkeyRecorded = { [weak self] keyCode, modifiers in
-            self?.hotkeyDidRecord(keyCode: keyCode, modifiers: modifiers)
-        }
-        hotkeyRecorderView = recorder
-
-        let recordRow = makeRow(label: "录制新组合", control: recorder)
-        recordCard.addSubview(recordRow)
-
-        let sep = makeSeparator(in: recordCard)
-        recordCard.addSubview(sep)
-
-        let resetBtn = NSButton(title: "恢复默认 (⌃⇧A)", target: self, action: #selector(resetHotkeyToDefault(_:)))
-        resetBtn.bezelStyle = .rounded
-        resetBtn.controlSize = .regular
-        let resetRow = makeRow(label: "默认设置", control: resetBtn)
-        recordCard.addSubview(resetRow)
-
-        NSLayoutConstraint.activate([
-            recordRow.topAnchor.constraint(equalTo: recordCard.topAnchor),
-            recordRow.leadingAnchor.constraint(equalTo: recordCard.leadingAnchor),
-            recordRow.trailingAnchor.constraint(equalTo: recordCard.trailingAnchor),
-
-            sep.topAnchor.constraint(equalTo: recordRow.bottomAnchor),
-            sep.leadingAnchor.constraint(equalTo: recordCard.leadingAnchor, constant: 16),
-            sep.trailingAnchor.constraint(equalTo: recordCard.trailingAnchor, constant: -16),
-
-            resetRow.topAnchor.constraint(equalTo: sep.bottomAnchor),
-            resetRow.leadingAnchor.constraint(equalTo: recordCard.leadingAnchor),
-            resetRow.trailingAnchor.constraint(equalTo: recordCard.trailingAnchor),
-            resetRow.bottomAnchor.constraint(equalTo: recordCard.bottomAnchor),
-        ])
+        // 一个 action 一张卡：[录制新组合] + 分隔 + [恢复默认]
+        let captureCard = makeHotkeyCard(action: .capture,
+                                         title: "区域截图",
+                                         defaultHint: "⌃⇧A")
+        let recordCard = makeHotkeyCard(action: .record,
+                                        title: "区域录屏",
+                                        defaultHint: "⌃⇧R")
 
         // 提示
         let hintIcon = NSImageView()
@@ -401,7 +335,7 @@ final class SettingsViewController: NSViewController {
         hintStack.translatesAutoresizingMaskIntoConstraints = false
 
         // 主栈
-        let mainStack = NSStackView(views: [displayCard, recordCard, hintStack])
+        let mainStack = NSStackView(views: [captureCard, recordCard, hintStack])
         mainStack.orientation = .vertical
         mainStack.spacing = 14
         mainStack.alignment = .leading
@@ -413,11 +347,93 @@ final class SettingsViewController: NSViewController {
             mainStack.leadingAnchor.constraint(equalTo: parent.leadingAnchor),
             mainStack.trailingAnchor.constraint(equalTo: parent.trailingAnchor),
 
-            displayCard.leadingAnchor.constraint(equalTo: mainStack.leadingAnchor),
-            displayCard.trailingAnchor.constraint(equalTo: mainStack.trailingAnchor),
+            captureCard.leadingAnchor.constraint(equalTo: mainStack.leadingAnchor),
+            captureCard.trailingAnchor.constraint(equalTo: mainStack.trailingAnchor),
             recordCard.leadingAnchor.constraint(equalTo: mainStack.leadingAnchor),
             recordCard.trailingAnchor.constraint(equalTo: mainStack.trailingAnchor),
         ])
+    }
+
+    /// 单个 action 的卡片：标题行 + 录制行 + 分隔 + 重置行。
+    /// - Parameters:
+    ///   - action: 要绑定的 HotkeyManager.Action
+    ///   - title: 标题（"区域截图"/"区域录屏"）
+    ///   - defaultHint: 重置按钮提示中显示的默认组合
+    private func makeHotkeyCard(action: HotkeyManager.Action,
+                                title: String,
+                                defaultHint: String) -> NSView {
+        // 临时挂到 self.view；后续由 mainStack.addArrangedSubview 重新 parent
+        let card = makeCard(in: view)
+
+        // 标题行（仅文字，左对齐）
+        let header = NSView()
+        header.translatesAutoresizingMaskIntoConstraints = false
+        let head = NSTextField(labelWithString: title)
+        head.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        head.textColor = NSColor.white.withAlphaComponent(0.92)
+        head.backgroundColor = .clear
+        head.translatesAutoresizingMaskIntoConstraints = false
+        header.addSubview(head)
+        NSLayoutConstraint.activate([
+            head.leadingAnchor.constraint(equalTo: header.leadingAnchor, constant: 16),
+            head.centerYAnchor.constraint(equalTo: header.centerYAnchor),
+            header.heightAnchor.constraint(equalToConstant: 38),
+        ])
+
+        // 录制行
+        let recorder = HotkeyRecorderView(action: action,
+                                          frame: NSRect(x: 0, y: 0, width: 240, height: 36))
+        recorder.translatesAutoresizingMaskIntoConstraints = false
+        recorder.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        recorder.heightAnchor.constraint(equalToConstant: 32).isActive = true
+        recorder.onHotkeyRecorded = { [weak self] keyCode, modifiers in
+            self?.hotkeyDidRecord(action: action, keyCode: keyCode, modifiers: modifiers)
+        }
+        hotkeyRecorderViews[action] = recorder
+        let recordRow = makeRow(label: "录制新组合", control: recorder)
+
+        // 重置行
+        let resetBtn = NSButton(title: "恢复默认 (\(defaultHint))",
+                                target: self,
+                                action: #selector(resetHotkeyTapped(_:)))
+        resetBtn.bezelStyle = .rounded
+        resetBtn.controlSize = .regular
+        resetBtn.tag = Int(action.rawValue)
+        let resetRow = makeRow(label: "默认设置", control: resetBtn)
+
+        let sep1 = makeSeparator(in: card)
+        let sep2 = makeSeparator(in: card)
+
+        card.addSubview(header)
+        card.addSubview(sep1)
+        card.addSubview(recordRow)
+        card.addSubview(sep2)
+        card.addSubview(resetRow)
+
+        NSLayoutConstraint.activate([
+            header.topAnchor.constraint(equalTo: card.topAnchor),
+            header.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            header.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+
+            sep1.topAnchor.constraint(equalTo: header.bottomAnchor),
+            sep1.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+            sep1.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+
+            recordRow.topAnchor.constraint(equalTo: sep1.bottomAnchor),
+            recordRow.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            recordRow.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+
+            sep2.topAnchor.constraint(equalTo: recordRow.bottomAnchor),
+            sep2.leadingAnchor.constraint(equalTo: card.leadingAnchor, constant: 16),
+            sep2.trailingAnchor.constraint(equalTo: card.trailingAnchor, constant: -16),
+
+            resetRow.topAnchor.constraint(equalTo: sep2.bottomAnchor),
+            resetRow.leadingAnchor.constraint(equalTo: card.leadingAnchor),
+            resetRow.trailingAnchor.constraint(equalTo: card.trailingAnchor),
+            resetRow.bottomAnchor.constraint(equalTo: card.bottomAnchor),
+        ])
+
+        return card
     }
 
     // MARK: - 关于
@@ -604,19 +620,17 @@ final class SettingsViewController: NSViewController {
         }
     }
 
-    private func hotkeyDidRecord(keyCode: UInt32, modifiers: NSEvent.ModifierFlags) {
+    private func hotkeyDidRecord(action: HotkeyManager.Action,
+                                 keyCode: UInt32,
+                                 modifiers: NSEvent.ModifierFlags) {
         let carbonMods = HotkeyManager.carbonModifiers(from: modifiers)
-        HotkeyManager.shared.updateHotkey(keyCode: keyCode, modifiers: carbonMods)
-        let display = KeyCodeMapping.displayString(keyCode: keyCode, modifiers: modifiers)
-        hotkeyDisplayLabel?.stringValue = display
+        HotkeyManager.shared.updateHotkey(action, keyCode: keyCode, modifiers: carbonMods)
     }
 
-    @objc private func resetHotkeyToDefault(_ sender: NSButton) {
-        HotkeyManager.shared.resetToDefault()
-        let manager = HotkeyManager.shared
-        hotkeyDisplayLabel?.stringValue = KeyCodeMapping.displayString(
-            keyCode: manager.currentKeyCode, carbonModifiers: manager.currentModifiers)
-        hotkeyRecorderView?.resetDisplay()
+    @objc private func resetHotkeyTapped(_ sender: NSButton) {
+        guard let action = HotkeyManager.Action(rawValue: UInt32(sender.tag)) else { return }
+        HotkeyManager.shared.resetToDefault(action)
+        hotkeyRecorderViews[action]?.resetDisplay()
     }
 
     private func abbreviatePath(_ path: String) -> String {
@@ -630,13 +644,23 @@ final class HotkeyRecorderView: NSView {
 
     var onHotkeyRecorded: ((UInt32, NSEvent.ModifierFlags) -> Void)?
 
+    /// 该录制器绑定的 Action。控制 setupUI / resetDisplay 拿到的"当前键位"来源；
+    /// 写入仍由外部 onHotkeyRecorded 回调决定，避免双写。
+    let action: HotkeyManager.Action
+
     private var isRecording = false
     private var displayLabel: NSTextField!
     private var localMonitor: Any?
 
-    override init(frame frameRect: NSRect) {
+    init(action: HotkeyManager.Action, frame frameRect: NSRect) {
+        self.action = action
         super.init(frame: frameRect)
         setupUI()
+    }
+
+    /// 兼容旧调用：默认绑定截图（capture）action。
+    override convenience init(frame frameRect: NSRect) {
+        self.init(action: .capture, frame: frameRect)
     }
 
     @available(*, unavailable)
@@ -657,7 +681,8 @@ final class HotkeyRecorderView: NSView {
 
         let manager = HotkeyManager.shared
         let currentDisplay = KeyCodeMapping.displayString(
-            keyCode: manager.currentKeyCode, carbonModifiers: manager.currentModifiers)
+            keyCode: manager.keyCode(for: action),
+            carbonModifiers: manager.modifiers(for: action))
 
         displayLabel = NSTextField(labelWithString: currentDisplay)
         displayLabel.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
@@ -709,7 +734,8 @@ final class HotkeyRecorderView: NSView {
             stopRecording()
             let manager = HotkeyManager.shared
             displayLabel.stringValue = KeyCodeMapping.displayString(
-                keyCode: manager.currentKeyCode, carbonModifiers: manager.currentModifiers)
+                keyCode: manager.keyCode(for: action),
+                carbonModifiers: manager.modifiers(for: action))
             return
         }
 
@@ -728,7 +754,8 @@ final class HotkeyRecorderView: NSView {
     func resetDisplay() {
         let manager = HotkeyManager.shared
         displayLabel.stringValue = KeyCodeMapping.displayString(
-            keyCode: manager.currentKeyCode, carbonModifiers: manager.currentModifiers)
+            keyCode: manager.keyCode(for: action),
+            carbonModifiers: manager.modifiers(for: action))
     }
 
     override var acceptsFirstResponder: Bool { true }
