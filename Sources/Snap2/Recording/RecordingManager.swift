@@ -180,7 +180,7 @@ final class RecordingManager: NSObject {
                 // 排除 Snap2 自身整个进程的窗口——这条比 `excludingWindows:` 关键：
                 // 控制面板 / toast 都是在 stream 起来 *之后* 才创建，按窗口列表过滤就漏了；
                 // 按 application 排除则任何当前 / 未来 Snap2 窗口都不会被录进视频。
-                let selfBundleID = Bundle.main.bundleIdentifier ?? AppInfo.bundleID
+                let selfBundleID = AppInfo.currentBundleID
                 let excludeApps = content.applications.filter {
                     $0.bundleIdentifier == selfBundleID
                 }

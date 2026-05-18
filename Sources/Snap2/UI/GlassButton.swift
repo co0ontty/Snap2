@@ -124,8 +124,9 @@ final class GlassButton: NSButton {
         CATransaction.begin()
         CATransaction.setAnimationDuration(Glass.animDuration)
         if isDestructive {
-            // 危险按钮：始终带 accent 染色，状态间叠加
-            let alpha: CGFloat = isPressed ? 0.55 : (isHovered ? 0.40 : 0.22)
+            // 危险按钮：常态保持低调（0.08 几乎透明），hover/press 才出红色高亮，
+            // 避免在工具栏一排灰白按钮中"反客为主"占走视觉焦点。
+            let alpha: CGFloat = isPressed ? 0.40 : (isHovered ? 0.28 : 0.08)
             bgLayer.backgroundColor = accentColor.withAlphaComponent(alpha).cgColor
         } else if isPressed {
             bgLayer.backgroundColor = Glass.pressedFill.cgColor
@@ -202,6 +203,10 @@ final class GlassColorSwatch: NSButton {
         dotLayer.frame = dotRect
         dotLayer.cornerRadius = dotRect.width / 2
         dotLayer.backgroundColor = color.cgColor
+        // 给色点描一道极轻的浅边——黑色 swatch 在深色玻璃背景上原本会"消失"，
+        // 加 1px 半透白后所有颜色都看得见轮廓，不破坏整体观感。
+        dotLayer.borderColor = NSColor.white.withAlphaComponent(0.30).cgColor
+        dotLayer.borderWidth = 1
 
         // 选中态：白色外环
         let ringInset: CGFloat = 1

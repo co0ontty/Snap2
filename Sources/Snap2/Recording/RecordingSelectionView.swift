@@ -83,6 +83,64 @@ final class RecordingSelectionView: NSView {
         context.restoreGState()
 
         drawHandles(in: context)
+        drawRecBadge(in: context)
+    }
+
+    /// 在选区左上角外侧绘制「● REC」红色徽章，与截图模式做明显视觉区分。
+    /// 用户系统强调色就是红色时，仅靠边框颜色不足以让人意识到当前在录屏。
+    private func drawRecBadge(in context: CGContext) {
+        // 选区太小时不绘制（避免遮挡）
+        guard selectionRect.width > 80, selectionRect.height > 40 else { return }
+
+        let badgeHeight: CGFloat = 22
+        let badgePadX: CGFloat = 10
+        let dotSize: CGFloat = 8
+        let labelText = "REC"
+
+        let font = NSFont.systemFont(ofSize: 11, weight: .bold)
+        let attrs: [NSAttributedString.Key: Any] = [
+            .font: font,
+            .foregroundColor: NSColor.white,
+        ]
+        let textSize = (labelText as NSString).size(withAttributes: attrs)
+        let badgeWidth = badgePadX + dotSize + 6 + textSize.width + badgePadX
+
+        // 贴选区左上外侧 6px
+        let bx = selectionRect.minX
+        let by = selectionRect.maxY + 6
+        let badgeRect = NSRect(x: bx, y: by, width: badgeWidth, height: badgeHeight)
+
+        context.saveGState()
+        // 圆角红底
+        let path = CGPath(roundedRect: badgeRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
+        context.addPath(path)
+        NSColor.systemRed.withAlphaComponent(0.92).setFill()
+        context.fillPath()
+        // 1px 白色描边
+        context.addPath(path)
+        NSColor.white.withAlphaComponent(0.4).setStroke()
+        context.setLineWidth(1)
+        context.strokePath()
+
+        // 白点
+        let dotRect = NSRect(x: bx + badgePadX,
+                             y: by + (badgeHeight - dotSize) / 2,
+                             width: dotSize, height: dotSize)
+        context.addPath(CGPath(ellipseIn: dotRect, transform: nil))
+        NSColor.white.setFill()
+        context.fillPath()
+        context.restoreGState()
+
+        // 文字 REC（绘制时切到 NSGraphicsContext）
+        NSGraphicsContext.saveGraphicsState()
+        let nsCtx = NSGraphicsContext(cgContext: context, flipped: false)
+        NSGraphicsContext.current = nsCtx
+        let textPoint = NSPoint(
+            x: bx + badgePadX + dotSize + 6,
+            y: by + (badgeHeight - textSize.height) / 2
+        )
+        (labelText as NSString).draw(at: textPoint, withAttributes: attrs)
+        NSGraphicsContext.restoreGraphicsState()
     }
 
     private func drawHandles(in context: CGContext) {

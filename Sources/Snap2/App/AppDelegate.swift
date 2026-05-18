@@ -72,9 +72,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc private func handleStartCapture(_ notification: Notification) {
-        // 录屏进行时不允许触发截图——保护正在写盘的视频会话
+        // 录屏进行时不允许触发截图——保护正在写盘的视频会话。
+        // 用户按了全局热键以为没反应，所以这里弹一条 toast 明确告知（菜单条已 disabled，
+        // 但热键路径没有视觉反馈）。
         if RecordingManager.shared.isActive {
             NSLog("[AppDelegate] 截图请求被忽略：录屏正在进行")
+            CopyToast.show(image: Self.busyPlaceholderImage(),
+                           message: "录屏进行中，无法截图",
+                           subtitle: "停止当前录屏后再试")
             return
         }
         guard ensureScreenCapturePermission() else { return }
@@ -97,10 +102,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         if CaptureManager.shared.isCapturing {
             NSLog("[AppDelegate] 录屏请求被忽略：截图正在进行")
+            CopyToast.show(image: Self.busyPlaceholderImage(),
+                           message: "截图进行中，无法录屏",
+                           subtitle: "完成或取消当前截图后再试")
             return
         }
         guard ensureScreenCapturePermission() else { return }
         rec.startPickingRegion()
+    }
+
+    /// 占位缩略图：截图/录屏互拒 toast 时用，避免 toast 显示空白图框。
+    private static func busyPlaceholderImage() -> NSImage {
+        let cfg = NSImage.SymbolConfiguration(pointSize: 28, weight: .semibold)
+        if let sym = NSImage(systemSymbolName: "exclamationmark.octagon.fill",
+                             accessibilityDescription: "无法操作")?
+            .withSymbolConfiguration(cfg) {
+            return sym
+        }
+        return NSImage(size: NSSize(width: 32, height: 32))
     }
 
     /// 弹窗 + 跳转系统设置；返回 true 代表权限已具备，调用方可继续

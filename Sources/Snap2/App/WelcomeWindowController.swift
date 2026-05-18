@@ -5,6 +5,13 @@ final class WelcomeWindowController: NSWindowController {
 
     private var onComplete: (() -> Void)?
 
+    /// 主按钮 / 提示 label 引用，授权流程里用来切换文案
+    private weak var startButton: WelcomeAccentButton?
+    private weak var permLabel: NSTextField?
+
+    /// 权限轮询任务（用户点"授权"后启动）
+    private var permissionPollTimer: Timer?
+
     init(onComplete: @escaping () -> Void) {
         self.onComplete = onComplete
 
@@ -98,7 +105,8 @@ final class WelcomeWindowController: NSWindowController {
             ("crop", "区域截图", "拖拽框选，松手即进标注"),
             ("scribble.variable", "实时标注", "箭头、矩形、画笔、文字…"),
             ("doc.on.clipboard", "一键复制", "Enter 复制到剪贴板"),
-            ("keyboard", "全键盘", "1-6 切工具，⌘Z 撤销"),
+            // 当前 7 个工具：箭头/矩形/椭圆/画笔/文字/高亮/马赛克
+            ("keyboard", "全键盘", "1-7 切工具，⌘Z 撤销"),
         ]
 
         let cellW: CGFloat = 232
@@ -135,6 +143,7 @@ final class WelcomeWindowController: NSWindowController {
         permLabel.backgroundColor = .clear
         permLabel.frame = NSRect(x: 46, y: 14, width: permBox.frame.width - 60, height: 20)
         permBox.addSubview(permLabel)
+        self.permLabel = permLabel
 
         // 主按钮（玻璃强调）
         let buttonW: CGFloat = 220, buttonH: CGFloat = 40
@@ -144,6 +153,7 @@ final class WelcomeWindowController: NSWindowController {
         btn.target = self
         btn.action = #selector(startTapped)
         contentView.addSubview(btn)
+        self.startButton = btn
     }
 
     private func addFeatureCell(in container: NSView, frame: NSRect, symbol: String, title: String, desc: String) {
@@ -185,14 +195,74 @@ final class WelcomeWindowController: NSWindowController {
     }
 
     @objc private func startTapped() {
-        if !CGPreflightScreenCaptureAccess() {
-            CGRequestScreenCaptureAccess()
+        // 已有权限：直接走完成流程
+        if CGPreflightScreenCaptureAccess() {
+            finishOnboarding()
+            return
         }
+        // 触发系统授权对话框
+        CGRequestScreenCaptureAccess()
+        // 切按钮文案到"等待授权..."并启动轮询；用户授权完毕（或回到应用）后才关窗
+        beginAwaitingPermission()
+    }
+
+    private func beginAwaitingPermission() {
+        startButton?.title = "等待授权…"
+        startButton?.attributedTitle = NSAttributedString(
+            string: "等待授权…",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+                .foregroundColor: NSColor.white
+            ])
+        startButton?.isEnabled = false
+        permLabel?.stringValue = "已唤起系统授权窗口；授权完成后将自动继续。"
+
+        // 0.5s 起，每 0.5s poll 一次；最多 60 次（30s）。
+        // 用户拒绝 / 关掉系统设置时按钮会自动复位为"重试"。
+        permissionPollTimer?.invalidate()
+        var ticks = 0
+        let timer = Timer(timeInterval: 0.5, repeats: true) { [weak self] t in
+            guard let self = self else { t.invalidate(); return }
+            ticks += 1
+            if CGPreflightScreenCaptureAccess() {
+                t.invalidate()
+                self.permissionPollTimer = nil
+                self.finishOnboarding()
+                return
+            }
+            if ticks >= 60 {
+                t.invalidate()
+                self.permissionPollTimer = nil
+                self.resetForPermissionRetry()
+            }
+        }
+        RunLoop.main.add(timer, forMode: .common)
+        permissionPollTimer = timer
+    }
+
+    private func resetForPermissionRetry() {
+        startButton?.isEnabled = true
+        startButton?.attributedTitle = NSAttributedString(
+            string: "再次尝试授权",
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
+                .foregroundColor: NSColor.white
+            ])
+        permLabel?.stringValue = "未检测到授权。请在系统设置中勾选 Snap²，再次点击下方按钮重试。"
+    }
+
+    private func finishOnboarding() {
+        permissionPollTimer?.invalidate()
+        permissionPollTimer = nil
         UserDefaults.standard.set(true, forKey: UDKey.hasCompletedOnboarding)
         window?.close()
         SettingsWindowController.shared.showWindow()
         onComplete?()
         onComplete = nil
+    }
+
+    deinit {
+        permissionPollTimer?.invalidate()
     }
 
     func showWindow() {

@@ -25,7 +25,8 @@ enum Glass {
     // 按钮选中态
     static let selectedFill = NSColor.white.withAlphaComponent(0.22)
     static let hoverFill = NSColor.white.withAlphaComponent(0.10)
-    static let pressedFill = NSColor.white.withAlphaComponent(0.45)
+    // 按下态：比 selected 稍亮即可，过亮会在按一下时显眼地"闪一下"
+    static let pressedFill = NSColor.white.withAlphaComponent(0.30)
 
     // 间距
     static let toolbarPadX: CGFloat = 8
@@ -61,7 +62,10 @@ enum LineWidthLevel: CGFloat, CaseIterable {
 }
 
 enum AnnotationPalette {
+    /// 调色板：黑色置首，覆盖浅色截图（白底文档/网页）的标注需求；
+    /// 白色保留以适配深色截图。
     static let colors: [NSColor] = [
+        NSColor.black,
         NSColor(srgbRed: 1.00, green: 0.27, blue: 0.27, alpha: 1.0), // 红
         NSColor(srgbRed: 1.00, green: 0.78, blue: 0.18, alpha: 1.0), // 黄
         NSColor(srgbRed: 0.31, green: 0.84, blue: 0.42, alpha: 1.0), // 绿

@@ -34,6 +34,10 @@ final class GlassToolbar: NSView {
     static let toolbarHeight: CGFloat = 46
     static let toolbarPadding: CGFloat = 10
 
+    /// 操作组按钮数（撤销/保存/复制/钉/录制）；不含独立的关闭按钮。
+    /// intrinsicWidth 与 buildLayout 都用同一个常量，避免硬编码漂移。
+    private static let actionsCount: Int = 5
+
     // 鼠标进入/离开整体工具栏时通知（外部用来做面板的折叠/展开）
     var onHoverEnter: (() -> Void)?
     var onHoverExit: (() -> Void)?
@@ -69,12 +73,26 @@ final class GlassToolbar: NSView {
         onHoverExit?()
     }
 
-    func setSelectedTool(_ tool: AnnotationToolType) { selectedTool = tool }
+    func setSelectedTool(_ tool: AnnotationToolType) {
+        selectedTool = tool
+        // mosaic 不消费 color，给颜色组整体 dim + 改 tooltip 提示用户
+        applyMosaicModeIfNeeded()
+    }
     func setSelectedColor(_ color: NSColor) {
         selectedColor = color
         syncColorHighlight()
     }
     func setSelectedWidth(_ w: LineWidthLevel) { selectedWidth = w }
+
+    /// 根据当前工具切换颜色组的视觉态：mosaic 时整组 dim 到 0.35
+    /// 并把 tooltip 改为"马赛克不使用颜色"，避免用户先选色再画 mosaic 却色不生效。
+    private func applyMosaicModeIfNeeded() {
+        let isMosaic = (selectedTool == .mosaic)
+        for sw in colorButtons {
+            sw.alphaValue = isMosaic ? 0.35 : 1.0
+            sw.toolTip = isMosaic ? "马赛克不使用颜色" : nil
+        }
+    }
 
     private func buildLayout() {
         let stack = NSStackView()
@@ -153,6 +171,7 @@ final class GlassToolbar: NSView {
         syncToolHighlight()
         syncColorHighlight()
         syncWidthHighlight()
+        applyMosaicModeIfNeeded()
     }
 
     private func separator() -> NSView {
@@ -222,17 +241,18 @@ final class GlassToolbar: NSView {
         let toolsCount = AnnotationToolType.allCases.count
         let colorsCount = AnnotationPalette.colors.count
         let widthsCount = LineWidthLevel.allCases.count
-        let actionsCount = 6  // undo / save / copy / pin / record / close
+        // 操作按钮数 = actions 数组 + 1 个独立 close
+        let buttonsAfterWidth = Self.actionsCount + 1
         let separatorsCount = 3 // 工具｜颜色｜线宽｜操作
 
         let toolsW = CGFloat(toolsCount) * Glass.buttonSize
         let colorsW = CGFloat(colorsCount) * 22
         let widthsW = CGFloat(widthsCount) * 26
-        let actionsW = CGFloat(actionsCount) * Glass.buttonSize
+        let actionsW = CGFloat(buttonsAfterWidth) * Glass.buttonSize
         let separatorsW = CGFloat(separatorsCount) * 1
 
         // stack 子视图总数 - 1 = spacing 数
-        let totalItems = toolsCount + colorsCount + widthsCount + actionsCount + separatorsCount
+        let totalItems = toolsCount + colorsCount + widthsCount + buttonsAfterWidth + separatorsCount
         let spacingsW = Glass.groupSpacing * CGFloat(max(0, totalItems - 1))
 
         let pad = Self.toolbarPadding * 2

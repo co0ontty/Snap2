@@ -179,15 +179,21 @@ final class SettingsViewController: NSViewController {
         let card2 = makeCard(in: parent)
 
         // 保存位置
+        let hasCustomPath = defaults.string(forKey: UDKey.saveDirectory) != nil
         let currentPath = defaults.string(forKey: UDKey.saveDirectory)
             ?? NSSearchPathForDirectoriesInDomains(.desktopDirectory, .userDomainMask, true).first
             ?? "~/Desktop"
 
-        let pathLabel = NSTextField(labelWithString: abbreviatePath(currentPath))
+        // 无自定义路径时显示"~/Desktop（默认）"提示，避免用户以为已经选过桌面。
+        let displayText = hasCustomPath ? abbreviatePath(currentPath)
+                                        : "\(abbreviatePath(currentPath))（默认）"
+        let pathLabel = NSTextField(labelWithString: displayText)
         pathLabel.font = NSFont.systemFont(ofSize: 12)
         pathLabel.textColor = NSColor.white.withAlphaComponent(0.55)
         pathLabel.backgroundColor = .clear
         pathLabel.lineBreakMode = .byTruncatingMiddle
+        // 完整路径作为 tooltip，让长路径用户 hover 即可看清。
+        pathLabel.toolTip = currentPath
         savePathLabel = pathLabel
 
         let chooseBtn = NSButton(title: "选择…", target: self, action: #selector(chooseSaveDirectory(_:)))
@@ -588,7 +594,9 @@ final class SettingsViewController: NSViewController {
             guard response == .OK, let url = panel.url else { return }
             let path = url.path
             UserDefaults.standard.set(path, forKey: UDKey.saveDirectory)
+            // 用户已选定，去掉"（默认）"后缀，同时更新 tooltip 为完整路径
             self?.savePathLabel?.stringValue = self?.abbreviatePath(path) ?? path
+            self?.savePathLabel?.toolTip = path
         }
     }
 
@@ -624,13 +632,38 @@ final class SettingsViewController: NSViewController {
                                  keyCode: UInt32,
                                  modifiers: NSEvent.ModifierFlags) {
         let carbonMods = HotkeyManager.carbonModifiers(from: modifiers)
-        HotkeyManager.shared.updateHotkey(action, keyCode: keyCode, modifiers: carbonMods)
+        let result = HotkeyManager.shared.updateHotkey(action,
+                                                       keyCode: keyCode,
+                                                       modifiers: carbonMods)
+        switch result {
+        case .success:
+            break
+        case .failure(let err):
+            switch err {
+            case .conflict(let occupiedBy):
+                let occupiedName = HotkeyManager.displayName(for: occupiedBy)
+                // 把录制框的显示回滚为当前真实热键，并闪红提示
+                hotkeyRecorderViews[action]?.resetDisplay()
+                hotkeyRecorderViews[action]?.flashConflict(
+                    message: "该组合已被「\(occupiedName)」占用"
+                )
+            }
+        }
     }
 
     @objc private func resetHotkeyTapped(_ sender: NSButton) {
         guard let action = HotkeyManager.Action(rawValue: UInt32(sender.tag)) else { return }
-        HotkeyManager.shared.resetToDefault(action)
-        hotkeyRecorderViews[action]?.resetDisplay()
+        let result = HotkeyManager.shared.resetToDefault(action)
+        switch result {
+        case .success:
+            hotkeyRecorderViews[action]?.resetDisplay()
+        case .failure(.conflict(let occupiedBy)):
+            // 极少见：用户把另一个 action 改成了"我的默认值"。提示而不静默重置失败。
+            let name = HotkeyManager.displayName(for: occupiedBy)
+            hotkeyRecorderViews[action]?.flashConflict(
+                message: "默认组合已被「\(name)」占用"
+            )
+        }
     }
 
     private func abbreviatePath(_ path: String) -> String {
@@ -742,13 +775,28 @@ final class HotkeyRecorderView: NSView {
         let modifiers = event.modifierFlags.intersection(.deviceIndependentFlagsMask)
         let hasModifier = modifiers.contains(.command) || modifiers.contains(.control) ||
                           modifiers.contains(.option) || modifiers.contains(.shift)
-        guard hasModifier else { return }
 
         let keyCode = UInt32(event.keyCode)
+        // 允许无修饰键的"功能键类"快捷键（F1–F19、媒体键等），它们是合法全局热键。
+        // 普通字母数字 / 符号等仍要求至少一个修饰键，避免误录"按字母 a 就触发截图"。
+        if !hasModifier {
+            guard Self.isFunctionKey(keyCode: keyCode) else { return }
+        }
+
         let clean = modifiers.intersection([.command, .control, .option, .shift])
         displayLabel.stringValue = KeyCodeMapping.displayString(keyCode: keyCode, modifiers: clean)
         stopRecording()
         onHotkeyRecorded?(keyCode, clean)
+    }
+
+    /// 是否属于"无需修饰键也允许"的功能键范畴
+    private static func isFunctionKey(keyCode: UInt32) -> Bool {
+        let fKeys: [Int32] = [
+            kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6,
+            kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12,
+            kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19,
+        ]
+        return fKeys.contains(Int32(keyCode))
     }
 
     func resetDisplay() {
@@ -756,6 +804,25 @@ final class HotkeyRecorderView: NSView {
         displayLabel.stringValue = KeyCodeMapping.displayString(
             keyCode: manager.keyCode(for: action),
             carbonModifiers: manager.modifiers(for: action))
+    }
+
+    /// 冲突反馈：录制框红边 + 临时文案 + 自动复位为当前真实热键。
+    func flashConflict(message: String) {
+        let originalText = displayLabel.stringValue
+        displayLabel.stringValue = message
+        displayLabel.textColor = .systemRed
+        layer?.borderColor = NSColor.systemRed.cgColor
+        layer?.borderWidth = 2
+        layer?.backgroundColor = NSColor.systemRed.withAlphaComponent(0.10).cgColor
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
+            guard let self = self else { return }
+            self.displayLabel.stringValue = originalText
+            self.displayLabel.textColor = NSColor.white.withAlphaComponent(0.90)
+            self.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
+            self.layer?.borderWidth = 1
+            self.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
+        }
     }
 
     override var acceptsFirstResponder: Bool { true }

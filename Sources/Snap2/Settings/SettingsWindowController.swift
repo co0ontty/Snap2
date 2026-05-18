@@ -38,7 +38,8 @@ final class SettingsWindowController: NSWindowController {
         }
         var subtitle: String {
             switch self {
-            case .general: return "保存与格式"
+            // 通用页含：启动 / 保存与格式 / 更新通道，旧文案"保存与格式"误导
+            case .general: return "启动、保存与更新"
             case .hotkey:  return "全局快捷键"
             case .about:   return "版本与信息"
             }
@@ -581,8 +582,19 @@ final class UpgradePillButton: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func setLatestVersion(_ v: String) {
-        label.stringValue = "升级"
+        // 旧实现只更新 tooltip，按钮文本永远是"升级"——必须 hover 才看得到版本号。
+        // 改为把版本号一并显示，与菜单栏"新版本 v… 可用"的文案对齐。
+        label.stringValue = "升级 v\(v)"
+        label.sizeToFit()
+        invalidateIntrinsicContentSize()
+        needsLayout = true
         toolTip = "新版本 v\(v) 可用，点击升级"
+    }
+
+    override var intrinsicContentSize: NSSize {
+        // 自适应文字宽度：基础 16px padding + label 自身宽度 + icon + 间距
+        let textWidth = label.intrinsicContentSize.width
+        return NSSize(width: max(60, textWidth + 36), height: 18)
     }
 
     override func layout() {

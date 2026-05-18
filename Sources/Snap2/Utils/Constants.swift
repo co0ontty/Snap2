@@ -6,6 +6,12 @@ import Carbon.HIToolbox
 enum AppInfo {
     static let name = "Snap²"
     static let bundleID = "com.chuer.snap2"
+
+    /// 当前进程的 bundle identifier，取不到时回退到硬编码值。
+    /// 抽出来避免 CaptureManager / RecordingManager 重复同一段 fallback。
+    static var currentBundleID: String {
+        Bundle.main.bundleIdentifier ?? bundleID
+    }
 }
 
 // MARK: - Hotkey
@@ -25,9 +31,6 @@ enum DefaultHotkey {
 enum UDKey {
     static let saveDirectory = "saveDirectory"
     static let imageFormat = "imageFormat"
-    static let includesCursor = "includesCursor"
-    static let playSoundOnCapture = "playSoundOnCapture"
-    static let copyToClipboard = "copyToClipboard"
     static let hotkeyKeyCode = "hotkeyKeyCode"
     static let hotkeyModifiers = "hotkeyModifiers"
     /// 录屏热键（与截图热键独立配置，默认 ⌃⇧R）
@@ -35,10 +38,6 @@ enum UDKey {
     static let recordingHotkeyModifiers = "recordingHotkeyModifiers"
     /// 录屏是否抓取系统音频（默认 true）
     static let recordingCapturesSystemAudio = "recordingCapturesSystemAudio"
-    static let lastSelectedTool = "lastSelectedTool"
-    static let annotationLineWidth = "annotationLineWidth"
-    static let annotationFontSize = "annotationFontSize"
-    static let annotationColor = "annotationColor"
     static let launchAtLogin = "launchAtLogin"
     static let jpegQuality = "jpegQuality"
     static let hasCompletedOnboarding = "hasCompletedOnboarding"
@@ -89,19 +88,6 @@ extension Notification.Name {
 // MARK: - Drawing Defaults
 
 enum DrawingDefaults {
-    static let lineWidth: CGFloat = 2.0
-    static let arrowLineWidth: CGFloat = 2.0
-    static let highlightAlpha: CGFloat = 0.35
-    static let fontSize: CGFloat = 14.0
-    static let cornerRadius: CGFloat = 4.0
-    static let handleSize: CGFloat = 8.0
-
-    static let strokeColor: NSColor = .systemRed
-    static let fillColor: NSColor = .clear
-    static let textColor: NSColor = .systemRed
-    static let highlightColor: NSColor = .systemYellow
-
-    static let selectionBorderColor: NSColor = .systemBlue
-    static let selectionBorderWidth: CGFloat = 1.0
+    /// 选区外的暗色蒙版填充。截图与录屏取景共用。
     static let overlayColor: NSColor = NSColor.black.withAlphaComponent(0.3)
 }

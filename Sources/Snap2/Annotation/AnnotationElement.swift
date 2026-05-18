@@ -21,6 +21,20 @@ final class AnnotationElement {
         self.color = color
         self.lineWidth = lineWidth
     }
+
+    /// 深拷贝。供 undoStack 在 push 历史快照时使用——避免后续修改 element
+    /// 字段时回灌到旧版本。mosaicSource 是 CGImage（值类型 + COW 引用），共享安全。
+    func copy() -> AnnotationElement {
+        let c = AnnotationElement(toolType: toolType, color: color, lineWidth: lineWidth)
+        c.startPoint = startPoint
+        c.endPoint = endPoint
+        c.points = points
+        c.text = text
+        c.font = font
+        c.mosaicSource = mosaicSource
+        c.mosaicSourceSize = mosaicSourceSize
+        return c
+    }
 }
 
 enum AnnotationToolType: Int, CaseIterable {

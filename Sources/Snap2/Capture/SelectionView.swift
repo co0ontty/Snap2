@@ -173,13 +173,23 @@ final class SelectionView: NSView {
     /// 钉图"重新标注"入口：直接进入 annotating，跳过选区阶段。
     /// 调用方负责把钉图屏幕坐标换算为本视图局部坐标，并尽量把原始 CGImage 一并提供，
     /// 这样 renderFinalImage 能跳过 NSImage round-trip 保住高分输出。
-    func startPinEdit(image: NSImage, cgImage: CGImage?, selectionInView rect: NSRect) {
+    /// - Parameter startTool: 从钉图 hover 工具栏点哪个工具进入就传哪个；nil 时保持上次工具。
+    func startPinEdit(image: NSImage,
+                      cgImage: CGImage?,
+                      selectionInView rect: NSRect,
+                      startTool: AnnotationToolType? = nil)
+    {
         capturedImage = image
         capturedCGImage = cgImage
         mosaicCache.removeAll()
         selectionRect = rect
         mode = .annotating
+        if let tool = startTool {
+            currentTool = tool
+        }
         showAnnotationToolbar()
+        // showAnnotationToolbar 内部从 currentTool 创建工具栏并 setSelectedTool，
+        // 所以 currentTool 已设过的话工具栏会自动同步到那个工具。
         needsDisplay = true
         window?.invalidateCursorRects(for: self)
     }
@@ -310,8 +320,9 @@ final class SelectionView: NSView {
     private func drawPinHandle(in context: CGContext) {
         guard let r = pinHandleRect() else { return }
         context.saveGState()
-        // 默认半透明，悬停时拉满，避免常态下喧宾夺主
-        context.setAlpha(isPinHandleHovered ? 1.0 : 0.35)
+        // 默认 0.6 让用户即便不 hover 也能看见可拖动手柄；悬停时拉满。
+        // 旧值 0.35 在浅色截图上几乎看不见，新用户不知道"还能拖出去钉到桌面"。
+        context.setAlpha(isPinHandleHovered ? 1.0 : 0.6)
 
         // 圆角暗色背景
         let bg = CGPath(roundedRect: r, cornerWidth: 6, cornerHeight: 6, transform: nil)
@@ -532,21 +543,39 @@ final class SelectionView: NSView {
     // MARK: - 键盘
 
     override func keyDown(with event: NSEvent) {
-        // 文字输入框激活时，把按键事件让给字段（含 Cmd+S 等避免触发宿主行为）
-        if activeTextField != nil {
-            super.keyDown(with: event)
-            return
-        }
-
         let modifiers = event.modifierFlags
             .intersection(.deviceIndependentFlagsMask)
             .subtracting([.function, .numericPad, .capsLock])
 
-        // ESC
+        // 文字输入框激活时：
+        //   - 普通按键 / ⌘Z       → 让给字段（输入文字 / 字段自己的 undo）
+        //   - ⌘S / ⌘C / ⌘P 等   → 提交当前文字后转到外层动作
+        // 这样在编辑时仍能"保存截图 / 复制 / 钉桌面"，但不会把 ⌘Z 解释成"撤销前一个箭头"
+        // 而让正在输入的文字蒸发掉。
+        if activeTextField != nil {
+            let isExitAction = modifiers.contains(.command) &&
+                event.charactersIgnoringModifiers.map({ ["s", "c", "p"].contains($0) }) == true
+            if isExitAction {
+                finishActiveText(commit: true)
+                // 接着 fallthrough 到下面的 Cmd 分支
+            } else {
+                super.keyDown(with: event)
+                return
+            }
+        }
+
+        // ESC：分级取消
+        //   1) 正在拖一个 element（鼠标按下未抬起）→ 仅丢弃当前元素
+        //   2) 标注模式有历史元素 → 撤销最近一个（等价于 ⌘Z）
+        //   3) 否则                → 关掉整次截图
         if event.keyCode == 53 {
             if mode == .annotating, currentElement != nil {
                 currentElement = nil
                 needsDisplay = true
+                return
+            }
+            if mode == .annotating, !elements.isEmpty {
+                performUndo()
                 return
             }
             CaptureManager.shared.cancelCapture()
@@ -576,7 +605,8 @@ final class SelectionView: NSView {
             }
         }
 
-        // 数字键 1-6 切工具（仅标注模式）
+        // 数字键 1-N 切工具（仅标注模式）。N = AnnotationToolType.allCases.count，
+        // 当前为 7：箭头/矩形/椭圆/画笔/文字/高亮/马赛克。
         if mode == .annotating, modifiers.isEmpty,
            let chars = event.charactersIgnoringModifiers, chars.count == 1,
            let digit = Int(chars), digit >= 1, digit <= AnnotationToolType.allCases.count
@@ -596,22 +626,62 @@ final class SelectionView: NSView {
         guard let screen = window?.screen else { return }
         hideSizeBadge()
 
-        // 优先从冻结画面裁剪——和用户实际看到的选区一致，且无需再调一次 SCK
-        if let frozenCG = frozenCGImage,
-           let frozenSize = frozenImage?.size,
-           let cropped = cropFrozenCGImage(frozenCG, frozenPointSize: frozenSize, to: selectionRect) {
-            self.capturedCGImage = cropped.cgImage
-            self.capturedImage = NSImage(cgImage: cropped.cgImage, size: cropped.pointSize)
-            self.mosaicCache.removeAll()
-            self.mode = .annotating
-            self.showAnnotationToolbar()
-            self.needsDisplay = true
-            self.window?.invalidateCursorRects(for: self)
-            completion?()
+        // 直接尝试一次冻结裁剪
+        if tryCropFrozenAndEnterAnnotating(completion: completion) {
             return
         }
 
-        // 降级：冻结尚未到达（用户飞快框完）或失败时重新走 SCK
+        // 冻结尚未到达（用户飞快框完）—— 短暂等待最多 ~250 ms 让 SCK 全屏冻结到位，
+        // 避免直接降级走 captureInline：那条路径会让用户看到 overlay 短暂"延迟一帧"
+        // 的画面（暗色蒙版还在屏上时再发一次 SCK 抓取）。
+        pollFrozenWithDeadline(remainingTries: 5, screen: screen, completion: completion)
+    }
+
+    /// 检查 frozenCGImage 是否已就绪；就绪则直接裁出 captured 并切到 annotating。
+    /// 返回 true 表示成功进入 annotating。
+    /// - 若窗口已不存在（用户在 polling 期间按了 Esc），返回 true 终止 polling 链，
+    ///   避免在已 detach 的 view 上继续操作。
+    private func tryCropFrozenAndEnterAnnotating(completion: (() -> Void)?) -> Bool {
+        guard window != nil else { return true }
+        guard let frozenCG = frozenCGImage,
+              let frozenSize = frozenImage?.size,
+              let cropped = cropFrozenCGImage(frozenCG, frozenPointSize: frozenSize, to: selectionRect)
+        else { return false }
+
+        self.capturedCGImage = cropped.cgImage
+        self.capturedImage = NSImage(cgImage: cropped.cgImage, size: cropped.pointSize)
+        self.mosaicCache.removeAll()
+        self.mode = .annotating
+        self.showAnnotationToolbar()
+        self.needsDisplay = true
+        self.window?.invalidateCursorRects(for: self)
+        completion?()
+        return true
+    }
+
+    /// 轮询 frozenCGImage 是否到达，每 50 ms 一次，最多 remainingTries 次。
+    /// 超过预算仍未到则降级走 captureInline。
+    private func pollFrozenWithDeadline(remainingTries: Int,
+                                        screen: NSScreen,
+                                        completion: (() -> Void)?)
+    {
+        if remainingTries <= 0 {
+            fallbackToCaptureInline(screen: screen, completion: completion)
+            return
+        }
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.050) { [weak self] in
+            guard let self = self else { return }
+            if self.tryCropFrozenAndEnterAnnotating(completion: completion) { return }
+            self.pollFrozenWithDeadline(remainingTries: remainingTries - 1,
+                                        screen: screen,
+                                        completion: completion)
+        }
+    }
+
+    /// 等不到冻结时的兜底：在 overlay 上直接发 SCK 截图（旧路径）。
+    private func fallbackToCaptureInline(screen: NSScreen, completion: (() -> Void)?) {
+        // polling 期间用户可能已 Esc 关掉 overlay
+        guard window != nil else { return }
         let screenFrame = screen.frame
         let captureRect = NSRect(
             x: screenFrame.origin.x + selectionRect.origin.x,
@@ -723,8 +793,8 @@ final class SelectionView: NSView {
         if let idx = hitTestAnnotationHandle(p) {
             selectionAdjust = .resizing(idx)
             resizeAnchor = anchorForHandle(idx)  // applyResize 直接读取此字段
-            // 编辑期间隐藏工具栏避免遮挡 + 联动浮窗的尺寸徽章
-            removeToolbar()
+            // 不再 removeToolbar——工具栏跟随选区移动（commitSelectionAdjust 重排位置），
+            // 避免每次微调都看到工具栏淡入淡出闪烁。
             showSizeBadge()
             updateSizeBadge()
             return
@@ -738,7 +808,6 @@ final class SelectionView: NSView {
                 y: p.y - selectionRect.origin.y
             )
             NSCursor.closedHand.set()
-            removeToolbar()
             showSizeBadge()
             updateSizeBadge()
             return
@@ -821,11 +890,18 @@ final class SelectionView: NSView {
         else { el.endPoint = local }
 
         if isValid(el) {
-            undoStack.append(elements)
+            pushUndoSnapshot()
             elements.append(el)
         }
         currentElement = nil
         needsDisplay = true
+    }
+
+    /// 把当前 elements 的深拷贝快照压入 undoStack。
+    /// 不直接 append elements——AnnotationElement 是 class，浅拷贝数组会与未来修改
+    /// 共享同一份 element 引用，潜在让旧版本回灌新字段。
+    private func pushUndoSnapshot() {
+        undoStack.append(elements.map { $0.copy() })
     }
 
     /// 标注模式下 resize / move 结束：
@@ -849,7 +925,18 @@ final class SelectionView: NSView {
         // selectionRect 跟随，move 视觉一致；resize 控制点已被 drawAnnotationResizeHandles
         // 隐藏，因此到这里 selectionAdjust 必然是 .moving，不会出现 capturedImage 被拉伸的情况。
 
-        showAnnotationToolbar()
+        // 工具栏不再 remove+rebuild，直接移到选区下方新位置避免淡入淡出闪烁。
+        // 若 toolbar 不存在（异常路径）才走原 showAnnotationToolbar。
+        if let panel = toolbarPanel {
+            let target = toolbarTargetOrigin(width: panel.frame.width)
+            NSAnimationContext.runAnimationGroup { ctx in
+                ctx.duration = 0.16
+                ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                panel.animator().setFrameOrigin(target)
+            }
+        } else {
+            showAnnotationToolbar()
+        }
         needsDisplay = true
         // 释放后鼠标可能停在 move ring / resize 控制点上，下一次 mouseMoved 会自动按新
         // cursor rect 切换光标；这里只 invalidate 让 AppKit 重新评估即可，不主动 set。
@@ -876,7 +963,8 @@ final class SelectionView: NSView {
         isDraggingPin = false
         NSCursor.crosshair.set()
         PinnedImageWindow.show(image: image, at: screenOrigin)
-        CaptureManager.shared.finishAndClose()
+        // 成功路径：editPin 时旧钉图销毁（避免出现"老版本 + 新拖出去的钉图"两张）
+        CaptureManager.shared.finishAndCloseDiscardingEditedPin()
     }
 
     private func isValid(_ el: AnnotationElement) -> Bool {
@@ -944,7 +1032,7 @@ final class SelectionView: NSView {
             el.endPoint = origin
             el.text = text
             el.font = NSFont.systemFont(ofSize: max(currentLineWidth * 6, 14))
-            undoStack.append(elements)
+            pushUndoSnapshot()
             elements.append(el)
         }
         needsDisplay = true
@@ -987,7 +1075,8 @@ final class SelectionView: NSView {
         let image = renderFinalImage()
         copyImageToClipboard(image)
         CopyToast.show(image: image)
-        CaptureManager.shared.finishAndClose()
+        // 成功路径：editPin 时旧钉图销毁，避免桌面遗留老版本
+        CaptureManager.shared.finishAndCloseDiscardingEditedPin()
     }
 
     /// 按设置目录+格式直接写文件，不弹任何对话框
@@ -1009,7 +1098,8 @@ final class SelectionView: NSView {
         CopyToast.show(image: image,
                        message: "已保存",
                        subtitle: filename)
-        CaptureManager.shared.finishAndClose()
+        // 成功路径：editPin 时旧钉图销毁
+        CaptureManager.shared.finishAndCloseDiscardingEditedPin()
 
         // primaryCGImage / encodeWithImageIO 只做 CG/ImageIO 计算，线程安全，
         // 这里直接派发到后台。失败回主线程兜底为复制 + 错误 toast。
@@ -1321,7 +1411,8 @@ final class SelectionView: NSView {
               let pw = window else { return }
 
         let scale = pw.screen?.backingScaleFactor ?? 1.0
-        let text = " \(Int(selectionRect.width * scale)) × \(Int(selectionRect.height * scale)) "
+        // 数值是像素（× backingScale），加 px 后缀避免与"点"单位混淆。
+        let text = " \(Int(selectionRect.width * scale)) × \(Int(selectionRect.height * scale)) px "
         label.stringValue = text
         label.sizeToFit()
 
@@ -1449,7 +1540,8 @@ extension SelectionView: GlassToolbarDelegate {
             y: win.frame.origin.y + selectionRect.origin.y
         )
         PinnedImageWindow.show(image: image, at: screenOrigin)
-        CaptureManager.shared.finishAndClose()
+        // 成功路径：editPin 时旧钉图销毁
+        CaptureManager.shared.finishAndCloseDiscardingEditedPin()
     }
 
     /// 工具栏录制按钮：把当前选区交给 RecordingManager 直接录屏，
@@ -1461,7 +1553,8 @@ extension SelectionView: GlassToolbarDelegate {
         guard let screen = screen else { return }
         // 捕获 rect / screen 后再拆 overlay，避免拆窗后丢失关联
         let rect = selectionRect
-        CaptureManager.shared.finishAndClose()
+        // 成功路径（用户主动转录屏）：editPin 时旧钉图销毁，避免录屏期间桌面又冒出来
+        CaptureManager.shared.finishAndCloseDiscardingEditedPin()
         // 派发到下一轮 runloop：让 overlay orderOut 完成、SCStream 旧会话释放后再启动新流
         DispatchQueue.main.async {
             RecordingManager.shared.startRecordingForRegion(rect, on: screen)

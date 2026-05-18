@@ -115,7 +115,9 @@ final class PinnedImageWindow: NSPanel {
         closeButton.contentTintColor = NSColor.white.withAlphaComponent(0.92)
         closeButton.target = self
         closeButton.action = #selector(closeTapped)
-        closeButton.alphaValue = 0
+        // 默认 0.6 让用户即便不 hover 也能瞥见 ✕，hover 拉满到 1.0。
+        // 旧值 0 完全隐藏，新用户找不到关闭入口。
+        closeButton.alphaValue = 0.6
         closeButton.toolTip = "关闭钉图"
         closeButton.autoresizingMask = [.minXMargin, .minYMargin]
         host.addSubview(closeButton)
@@ -152,7 +154,8 @@ final class PinnedImageWindow: NSPanel {
         hoverToolbar?.pinMouseExited()
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.20
-            closeButton.animator().alphaValue = 0.0
+            // 落回 peek 透明度（0.6），不是完全隐藏
+            closeButton.animator().alphaValue = 0.6
         }
     }
 
@@ -164,17 +167,24 @@ final class PinnedImageWindow: NSPanel {
         }
     }
 
-    func editFromHoverToolbar() {
+    /// 从 hover 工具栏的某个工具按钮进入重标注。
+    /// startTool 非空时 SelectionView 会把当前工具设成它（修复"点画笔却还是上次工具"）。
+    func editFromHoverToolbar(startTool: AnnotationToolType?) {
         // 异步派发：CaptureManager 会 orderOut 自身，避免在 mouseDown loop 内拆窗
         hoverToolbar?.hideImmediately()
         DispatchQueue.main.async { [weak self] in
             guard let self = self else { return }
-            CaptureManager.shared.editPin(self)
+            CaptureManager.shared.editPin(self, startTool: startTool)
         }
     }
 
-    func closeFromHoverToolbar() {
-        closeTapped()
+    /// CaptureManager 在"成功路径"结束 editPin 时调用：
+    /// 直接销毁旧钉图（不走 dismissAnimated 的淡出，因为新的结果（toast/新 pin）
+    /// 正在同时出现，把这次销毁做得静默一些反而更顺）。
+    func discardForReplacement() {
+        hoverToolbar?.detach()
+        orderOut(nil)
+        PinnedImageWindow.allPins.removeAll { $0 === self }
     }
 
     private func dismissAnimated() {

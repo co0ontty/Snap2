@@ -13,6 +13,10 @@ final class CaptureManager {
     private(set) var isCapturing = false
     /// 当前被"重新标注"的钉图——会在编辑期间隐藏，结束后再 orderFront 回来
     private var pinBeingEdited: PinnedImageWindow?
+    /// 本次会话结束时是否要"销毁"被编辑的钉图（而非还原）。
+    /// 成功路径（save / copy / pin / record）会先置 true 再 finishAndClose；
+    /// 取消路径（Esc / 关闭按钮）保持 false，钉图照旧 orderFront 回来。
+    private var shouldDiscardEditedPinOnClose = false
 
     // MARK: - 开始截图
 
@@ -66,7 +70,7 @@ final class CaptureManager {
                 display.displayID == screenDisplayID
             }) ?? content.displays.first else { return nil }
 
-            let selfBundleID = Bundle.main.bundleIdentifier ?? AppInfo.bundleID
+            let selfBundleID = AppInfo.currentBundleID
             let excludeWindows = content.windows.filter { w in
                 overlayWindowIDs.contains(CGWindowID(w.windowID)) ||
                 w.owningApplication?.bundleIdentifier == selfBundleID
@@ -99,8 +103,13 @@ final class CaptureManager {
 
     /// 把钉图作为画布重新进入标注模式：暂时隐藏原钉图，开一个仅覆盖钉图所在屏幕的
     /// overlay，把钉图图片直接当作 capturedImage 灌进 SelectionView，跳过选区阶段。
-    /// Enter / Esc 走原始流程（复制 / 静默保存 / 取消），结束时原钉图被 orderFront 回来。
-    func editPin(_ pin: PinnedImageWindow) {
+    /// Enter / Esc 走原始流程：
+    ///   - 成功路径（save/copy/pin/record） → 旧钉图销毁
+    ///   - 取消路径（Esc / 关闭按钮）       → 旧钉图 orderFront 回来
+    /// 由 finishAndClose / finishAndCloseDiscardingEditedPin 的语义切换决定。
+    /// - Parameter startTool: 可选起始工具——从钉图 hover 工具栏点哪个工具进入就传哪个。
+    func editPin(_ pin: PinnedImageWindow,
+                 startTool: AnnotationToolType? = nil) {
         guard !isCapturing else { return }
 
         // 1. 选钉图所在屏幕（取相交面积最大的；保底用主屏）
@@ -110,8 +119,9 @@ final class CaptureManager {
         } ?? NSScreen.main ?? NSScreen.screens.first
         guard let targetScreen = screen else { return }
 
-        // 2. 隐藏原钉图，标记待恢复
+        // 2. 隐藏原钉图，标记待恢复（默认走"取消路径"逻辑；成功路径会另置 flag）
         pinBeingEdited = pin
+        shouldDiscardEditedPinOnClose = false
         pin.orderOut(nil)
 
         // 3. 启动 overlay（同 startCapture，但只一块屏幕）
@@ -137,7 +147,8 @@ final class CaptureManager {
         (overlay.contentView as? SelectionView)?.startPinEdit(
             image: pin.currentImage,
             cgImage: pin.currentCGImage,
-            selectionInView: local
+            selectionInView: local,
+            startTool: startTool
         )
     }
 
@@ -174,7 +185,7 @@ final class CaptureManager {
                 }
 
                 // 排除自身所有窗口
-                let selfBundleID = Bundle.main.bundleIdentifier ?? AppInfo.bundleID
+                let selfBundleID = AppInfo.currentBundleID
                 let excludeWindows = content.windows.filter { w in
                     overlayWindowIDs.contains(CGWindowID(w.windowID)) ||
                     w.owningApplication?.bundleIdentifier == selfBundleID
@@ -205,7 +216,16 @@ final class CaptureManager {
 
     // MARK: - 完成并关闭
 
+    /// 取消语义：Esc / 关闭按钮调用。若处于"编辑钉图"流程，旧钉图 orderFront 回来。
     func finishAndClose() {
+        closeAllOverlays()
+    }
+
+    /// 成功语义：复制 / 保存 / 钉桌面 / 录制选区 调用。
+    /// 若处于"编辑钉图"流程，旧钉图被销毁（不再 orderFront），避免桌面同时出现
+    /// 老版本 + 新结果（save 文件、新 pin 等）的重复钉图。
+    func finishAndCloseDiscardingEditedPin() {
+        shouldDiscardEditedPinOnClose = true
         closeAllOverlays()
     }
 
@@ -219,11 +239,18 @@ final class CaptureManager {
         overlayWindows.removeAll()
         isCapturing = false
 
-        // 编辑期间隐藏的钉图：无论 Enter 还是 Esc 都还原（用户选择了"走原始流程"）
+        // 编辑期间隐藏的钉图：根据 shouldDiscardEditedPinOnClose 决定还原还是销毁。
         if let pin = pinBeingEdited {
-            pin.orderFront(nil)
+            if shouldDiscardEditedPinOnClose {
+                // 销毁旧钉图——orderOut 即可（PinnedImageWindow 的 allPins 静态强引用
+                // 由其内部 dismissAnimated 维护，这里直接 orderOut + 主动从 allPins 移除）。
+                pin.discardForReplacement()
+            } else {
+                pin.orderFront(nil)
+            }
             pinBeingEdited = nil
         }
+        shouldDiscardEditedPinOnClose = false
     }
 }
 

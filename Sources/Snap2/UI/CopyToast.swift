@@ -9,33 +9,61 @@ final class CopyToast {
 
     static func show(image: NSImage,
                      message: String = "已复制到剪贴板",
-                     subtitle: String = "Enter 截图 / ⌘V 粘贴")
+                     subtitle: String = "⌘V 粘贴")
     {
+        // 立刻做一份小缩略图，避免 toast 在屏上 1.4s 期间一直持有整张 4K/5K 原图。
+        let thumbnail = makeThumbnail(of: image, maxDimension: 128)
         DispatchQueue.main.async {
             current?.orderOut(nil)
             current = nil
-            present(image: image, message: message, subtitle: subtitle)
+            present(image: thumbnail, message: message, subtitle: subtitle)
         }
+    }
+
+    /// 按原图比例缩到 maxDimension 内，返回新 NSImage。原图不再被 toast retain。
+    private static func makeThumbnail(of image: NSImage, maxDimension: CGFloat) -> NSImage {
+        let s = image.size
+        guard s.width > 0, s.height > 0 else { return image }
+        let scale = min(1.0, maxDimension / max(s.width, s.height))
+        let target = NSSize(width: max(1, round(s.width * scale)),
+                            height: max(1, round(s.height * scale)))
+        let thumb = NSImage(size: target)
+        thumb.lockFocus()
+        image.draw(in: NSRect(origin: .zero, size: target),
+                   from: .zero,
+                   operation: .copy,
+                   fraction: 1.0)
+        thumb.unlockFocus()
+        return thumb
     }
 
     private static func present(image: NSImage, message: String, subtitle: String) {
         guard let screen = NSScreen.main else { return }
 
-        let size = NSSize(width: 280, height: 76)
+        // 缩略图容器 56×40 长方形，按原图比例 .scaleProportionallyDown 保留宽高比，
+        // 避免长截图/超宽截图被压成方块看不清。
+        let thumbBoxW: CGFloat = 56
+        let thumbBoxH: CGFloat = 40
+        let size = NSSize(width: 280, height: 68)
         let panel = GlassPanel(size: size, cornerRadius: 18, level: .floating)
 
         let host = panel.contentBox
 
-        // 缩略图
-        let thumb = NSImageView(frame: NSRect(x: 14, y: 14, width: 48, height: 48))
-        thumb.imageScaling = .scaleProportionallyUpOrDown
+        let thumbY = (size.height - thumbBoxH) / 2
+        let thumb = NSImageView(frame: NSRect(x: 14, y: thumbY,
+                                              width: thumbBoxW, height: thumbBoxH))
+        thumb.imageScaling = .scaleProportionallyDown
+        thumb.imageAlignment = .alignCenter
         thumb.image = image
         thumb.wantsLayer = true
-        thumb.layer?.cornerRadius = 8
+        thumb.layer?.cornerRadius = 6
         thumb.layer?.masksToBounds = true
         thumb.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
         thumb.layer?.borderWidth = 1
         host.addSubview(thumb)
+
+        let textLeft: CGFloat = 14 + thumbBoxW + 12
+        let textWidth = size.width - textLeft - 14
 
         // 主标签
         let title = NSTextField(labelWithString: message)
@@ -44,7 +72,7 @@ final class CopyToast {
         title.backgroundColor = .clear
         title.isBezeled = false
         title.isEditable = false
-        title.frame = NSRect(x: 76, y: 38, width: size.width - 90, height: 18)
+        title.frame = NSRect(x: textLeft, y: 34, width: textWidth, height: 18)
         host.addSubview(title)
 
         // 副标签
@@ -55,7 +83,7 @@ final class CopyToast {
         sub.isBezeled = false
         sub.isEditable = false
         sub.lineBreakMode = .byTruncatingMiddle
-        sub.frame = NSRect(x: 76, y: 18, width: size.width - 90, height: 16)
+        sub.frame = NSRect(x: textLeft, y: 14, width: textWidth, height: 16)
         host.addSubview(sub)
 
         // 屏幕右上角（与 macOS 系统通知方向一致）

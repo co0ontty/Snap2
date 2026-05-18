@@ -6,8 +6,9 @@ import AppKit
 final class PinHoverToolbar {
 
     /// 隐藏态吸附在钉图下边框露出的高度。
-    /// 完全归零会让用户找不到工具栏；3px 在 cornerRadius=14 下能显出一条玻璃边。
-    private static let peekHeight: CGFloat = 3
+    /// 完全归零会让用户找不到工具栏；旧值 3px 在 4K Retina 上几乎被圆角吃光，
+    /// 提到 8px 让玻璃边明显可见但不会喧宾夺主。
+    private static let peekHeight: CGFloat = 8
 
     private weak var owner: PinnedImageWindow?
     private let panel: GlassPanel
@@ -43,8 +44,10 @@ final class PinHoverToolbar {
 
         toolbarView.onHoverEnter = { [weak self] in self?.toolbarMouseEntered() }
         toolbarView.onHoverExit = { [weak self] in self?.toolbarMouseExited() }
-        toolbarView.onEdit = { [weak self] in self?.owner?.editFromHoverToolbar() }
-        toolbarView.onClose = { [weak self] in self?.owner?.closeFromHoverToolbar() }
+        // 每个工具按钮带回自己的 toolType；外层把它转给 SelectionView 同步起始工具
+        toolbarView.onEditTool = { [weak self] tool in
+            self?.owner?.editFromHoverToolbar(startTool: tool)
+        }
 
         owner.addChildWindow(panel, ordered: .below)
         moveToPeekPosition()
@@ -220,9 +223,11 @@ private final class PinHoverToolbarView: NSView {
     static let toolbarHeight: CGFloat = 42
     static let intrinsicWidth: CGFloat = {
         let toolsCount = CGFloat(toolbarTools.count)
-        let arrangedItems = toolsCount + 4 // grip + 两条分割线 + close
+        // grip + 1 条分隔 + N 个工具按钮
+        let arrangedItems = toolsCount + 2
         let spacings = max(0, arrangedItems - 1) * Glass.groupSpacing
-        return 16 + 22 + 1 + toolsCount * buttonSize + 1 + buttonSize + spacings
+        // 左右内边距各 8 + grip 22 + 分隔 1 + 工具按钮 ×
+        return 16 + 22 + 1 + toolsCount * buttonSize + spacings
     }()
 
     private static let buttonSize: CGFloat = 28
@@ -230,8 +235,8 @@ private final class PinHoverToolbarView: NSView {
 
     var onHoverEnter: (() -> Void)?
     var onHoverExit: (() -> Void)?
-    var onEdit: (() -> Void)?
-    var onClose: (() -> Void)?
+    /// 工具按钮被点击：回传具体的 toolType，外层据此设置 SelectionView 的起始工具
+    var onEditTool: ((AnnotationToolType) -> Void)?
 
     private var trackingArea: NSTrackingArea?
 
@@ -286,24 +291,13 @@ private final class PinHoverToolbarView: NSView {
         stack.addArrangedSubview(separator())
 
         for tool in Self.toolbarTools {
-            let button = GlassButton(symbol: tool.symbolName,
-                                     size: Self.buttonSize,
-                                     tooltip: "重新标注：\(tool.displayName)")
+            let button = ToolGlassButton(tool: tool, size: Self.buttonSize)
             button.target = self
-            button.action = #selector(editTapped)
+            button.action = #selector(editToolTapped(_:))
             stack.addArrangedSubview(button)
         }
-
-        stack.addArrangedSubview(separator())
-
-        let close = GlassButton(symbol: "xmark",
-                                size: Self.buttonSize,
-                                tooltip: "关闭钉图")
-        close.accentColor = .systemRed
-        close.isDestructive = true
-        close.target = self
-        close.action = #selector(closeTapped)
-        stack.addArrangedSubview(close)
+        // 关闭按钮已移除——PinnedImageWindow 右上角自身的 ✕ 承担关闭职责，
+        // 此处保持「重新标注入口」语义单一，避免两个 ✕ 让用户困惑。
     }
 
     private func separator() -> NSView {
@@ -316,13 +310,24 @@ private final class PinHoverToolbarView: NSView {
         return view
     }
 
-    @objc private func editTapped() {
-        DispatchQueue.main.async { [weak self] in self?.onEdit?() }
+    @objc private func editToolTapped(_ sender: ToolGlassButton) {
+        let tool = sender.tool
+        DispatchQueue.main.async { [weak self] in self?.onEditTool?(tool) }
     }
+}
 
-    @objc private func closeTapped() {
-        DispatchQueue.main.async { [weak self] in self?.onClose?() }
+/// 给按钮挂一个 toolType 身份，便于回调里取出。
+/// 单独继承避免用 sender.tag（int）做无类型映射。
+private final class ToolGlassButton: GlassButton {
+    let tool: AnnotationToolType
+    init(tool: AnnotationToolType, size: CGFloat) {
+        self.tool = tool
+        super.init(symbol: tool.symbolName, title: "",
+                   size: size,
+                   tooltip: "重新标注：\(tool.displayName)")
     }
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
 }
 
 private final class PinToolbarGripView: NSView {

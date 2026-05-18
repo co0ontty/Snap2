@@ -12,10 +12,10 @@ class StatusBarController {
     private var recordItem: NSMenuItem!
     private var updateItem: NSMenuItem!
 
-    /// 录制中的"快捷操作"附加状态项：左边时长 label，右边停止按钮
-    /// 不挂菜单，点击直接派发 .recordingStopRequested。
+    /// 录制中追加在菜单栏的"时长 label"。停止按钮已不再放在状态栏：
+    /// 状态栏永远在系统主菜单栏所在屏，主屏与录屏屏不同时停止按钮会"跨屏"，
+    /// 而 RecordingControlPanel 已经把停止按钮放在录屏所在屏右上角。
     private var recordingTimerItem: NSStatusItem?
-    private var recordingStopItem: NSStatusItem?
     private var recordingTimer: Timer?
     private var recordingStartedAt: Date?
 
@@ -415,8 +415,8 @@ class StatusBarController {
         updateMenuForRecording(false)
     }
 
-    /// 在主图标右侧追加两个 NSStatusItem：时长 label + 停止按钮。
-    /// 不挂菜单，点击直接发出 .recordingStopRequested 由 RecordingManager 接管。
+    /// 在主图标右侧追加一个 NSStatusItem：时长 label。
+    /// 停止入口由 RecordingControlPanel（位于录屏所在屏）与全局热键 / Esc 共同承担。
     private func installRecordingQuickActions() {
         removeRecordingQuickActions()  // 防御性：重入时先清掉
 
@@ -429,20 +429,6 @@ class StatusBarController {
             btn.toolTip = "Snap² · 录制时长"
         }
         recordingTimerItem = timer
-
-        // 停止按钮
-        let stop = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
-        if let btn = stop.button {
-            let img = NSImage(systemSymbolName: "stop.circle.fill",
-                              accessibilityDescription: "停止录屏")
-            img?.isTemplate = true
-            btn.image = img
-            btn.contentTintColor = .systemRed
-            btn.toolTip = "停止录屏"
-            btn.target = self
-            btn.action = #selector(stopRecordingFromStatusBar)
-        }
-        recordingStopItem = stop
 
         // 启动 1Hz 计时器更新时长
         recordingStartedAt = Date()
@@ -462,11 +448,7 @@ class StatusBarController {
         if let item = recordingTimerItem {
             NSStatusBar.system.removeStatusItem(item)
         }
-        if let item = recordingStopItem {
-            NSStatusBar.system.removeStatusItem(item)
-        }
         recordingTimerItem = nil
-        recordingStopItem = nil
     }
 
     private func tickRecordingTimer() {
@@ -483,11 +465,6 @@ class StatusBarController {
         if recordItem?.title.hasPrefix("停止录屏") == true {
             recordItem.title = "停止录屏 \(text)"
         }
-    }
-
-    @objc private func stopRecordingFromStatusBar() {
-        // 与控制面板停止按钮、⌃⇧R 二次触发走同一路径
-        NotificationCenter.default.post(name: .recordingStopRequested, object: nil)
     }
 
     /// 录制中：截图条目禁用、录制条目变 "停止录屏"。

@@ -181,26 +181,69 @@ final class HotkeyManager {
         bindings[action]?.modifiers ?? action.defaultCarbonModifiers
     }
 
-    /// 更新某个 action 的快捷键并持久化
-    func updateHotkey(_ action: Action, keyCode: UInt32, modifiers: UInt32) {
+    /// 与其它 action 的快捷键冲突错误
+    enum UpdateError: Error {
+        /// 该组合已被另一个 action 占用。返回占用方便于 UI 提示。
+        case conflict(occupiedBy: Action)
+    }
+
+    /// 更新某个 action 的快捷键并持久化。
+    /// 冲突时（同样 keyCode + modifiers 已被另一个 action 占用）拒绝写入，
+    /// 返回 .failure(.conflict(occupiedBy:))，UI 据此 flash 警告。
+    @discardableResult
+    func updateHotkey(_ action: Action,
+                      keyCode: UInt32,
+                      modifiers: UInt32) -> Result<Void, UpdateError>
+    {
+        if let conflicting = conflictingAction(forKeyCode: keyCode,
+                                                modifiers: modifiers,
+                                                excluding: action)
+        {
+            return .failure(.conflict(occupiedBy: conflicting))
+        }
         bindings[action] = Binding(keyCode: keyCode, modifiers: modifiers, ref: nil)
         saveToDefaults(action)
         register(action)
         NotificationCenter.default.post(name: .hotkeyChanged, object: action)
+        return .success(())
+    }
+
+    /// 检查是否有其它 action 已绑定相同 keyCode + modifiers
+    private func conflictingAction(forKeyCode keyCode: UInt32,
+                                   modifiers: UInt32,
+                                   excluding self_: Action) -> Action?
+    {
+        for (act, b) in bindings where act != self_ {
+            if b.keyCode == keyCode && b.modifiers == modifiers {
+                return act
+            }
+        }
+        return nil
     }
 
     /// 旧 API：默认指截图热键
-    func updateHotkey(keyCode: UInt32, modifiers: UInt32) {
+    @discardableResult
+    func updateHotkey(keyCode: UInt32, modifiers: UInt32) -> Result<Void, UpdateError> {
         updateHotkey(.capture, keyCode: keyCode, modifiers: modifiers)
     }
 
-    func resetToDefault(_ action: Action) {
+    @discardableResult
+    func resetToDefault(_ action: Action) -> Result<Void, UpdateError> {
         updateHotkey(action, keyCode: action.defaultKeyCode, modifiers: action.defaultCarbonModifiers)
     }
 
     /// 旧 API：默认指截图热键
-    func resetToDefault() {
+    @discardableResult
+    func resetToDefault() -> Result<Void, UpdateError> {
         resetToDefault(.capture)
+    }
+
+    /// 给 UI 用的人类可读名称
+    static func displayName(for action: Action) -> String {
+        switch action {
+        case .capture: return "区域截图"
+        case .record:  return "区域录屏"
+        }
     }
 
     // MARK: - 修饰键互转
