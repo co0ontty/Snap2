@@ -122,20 +122,28 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         return NSImage(size: NSSize(width: 32, height: 32))
     }
 
-    /// 弹窗 + 跳转系统设置；返回 true 代表权限已具备，调用方可继续
+    /// 弹"拖拽授权"气泡引导用户去系统设置；返回 true 代表权限已具备，调用方可继续。
+    ///
+    /// 早先版本是 NSAlert + 老 URL，但用户经常卡在"系统设置里找不到 Snap²"——TCC 没注册
+    /// 时 .app 根本不出现在权限列表里。现在改成贴在系统设置下方的拖拽气泡：用户把图标
+    /// 拖进列表就完成授权，等同于从 Finder 拖 .app。
+    ///
+    /// 授权成功后只 dismiss 气泡 + 弹 toast 提示，不做 auto-retry：跨秒级异步重试容易
+    /// 变成"幽灵截图"，让用户手动再触发一次更稳。
     private func ensureScreenCapturePermission() -> Bool {
         if CGPreflightScreenCaptureAccess() { return true }
-        let alert = NSAlert()
-        alert.messageText = "需要屏幕录制权限"
-        alert.informativeText = "请在「系统设置 → 隐私与安全性 → 屏幕录制」中为 Snap² 开启权限，然后重试。"
-        alert.addButton(withTitle: "打开系统设置")
-        alert.addButton(withTitle: "取消")
-        alert.alertStyle = .warning
-        if alert.runModal() == .alertFirstButtonReturn {
-            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.security?Privacy_ScreenCapture") {
-                NSWorkspace.shared.open(url)
-            }
-        }
+        PermissionAssistant.shared.present(
+            panel: .screenRecording,
+            from: nil,
+            onGranted: {
+                CopyToast.show(
+                    image: Self.busyPlaceholderImage(),
+                    message: "已授权 Snap²",
+                    subtitle: "再次按快捷键即可截图 / 录屏"
+                )
+            },
+            onCancel: nil
+        )
         return false
     }
 
