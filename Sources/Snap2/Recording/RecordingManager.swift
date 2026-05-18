@@ -221,7 +221,14 @@ final class RecordingManager: NSObject {
                 }
                 self.stream = stream
                 self.state = .recording
-                self.showControlPanel(on: screen)
+                // NSScreen 非 Sendable，不能在 @Sendable Task 闭包里直接捕获外层引用；
+                // 改用前面提出来的 displayID 在 main actor 上反查，等价但 Sendable 干净。
+                let panelScreen = NSScreen.screens.first(where: {
+                    ($0.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID) == screenDisplayID
+                }) ?? NSScreen.main
+                if let panelScreen {
+                    self.showControlPanel(on: panelScreen)
+                }
                 NotificationCenter.default.post(name: .recordingStarted, object: nil)
             } catch {
                 self.writer?.cancel()
@@ -325,7 +332,7 @@ final class RecordingManager: NSObject {
 
     private func showControlPanel(on screen: NSScreen) {
         let panel = RecordingControlPanel()
-        panel.onStop = { [weak self] in
+        panel.onStop = {
             // 走统一的 stopRequested 流，让热键和按钮共享一条路径
             NotificationCenter.default.post(name: .recordingStopRequested, object: nil)
         }

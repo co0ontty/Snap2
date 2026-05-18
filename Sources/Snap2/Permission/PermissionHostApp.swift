@@ -3,7 +3,10 @@ import Foundation
 
 /// 描述要引导用户授权的"宿主应用"——也就是当前进程自己。
 /// 把 displayName / bundleURL / icon 三件套打包，方便气泡的拖拽行、文案统一用一份数据。
-struct PermissionHostApp: Sendable {
+///
+/// 不标 Sendable：NSImage 非 Sendable，且这个 struct 只在主线程的 UI 路径里流转，
+/// 强行加 Sendable 反而要在 icon 上 @unchecked，得不偿失。
+struct PermissionHostApp {
     let displayName: String
     let bundleURL: URL
     let icon: NSImage
