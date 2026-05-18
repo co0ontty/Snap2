@@ -791,12 +791,13 @@ final class HotkeyRecorderView: NSView {
 
     /// 是否属于"无需修饰键也允许"的功能键范畴
     private static func isFunctionKey(keyCode: UInt32) -> Bool {
-        let fKeys: [Int32] = [
+        // kVK_F* 在 Carbon 头里是 C int，Swift 映射成 Int；直接用 Int 数组避免逐个转。
+        let fKeys: [Int] = [
             kVK_F1, kVK_F2, kVK_F3, kVK_F4, kVK_F5, kVK_F6,
             kVK_F7, kVK_F8, kVK_F9, kVK_F10, kVK_F11, kVK_F12,
             kVK_F13, kVK_F14, kVK_F15, kVK_F16, kVK_F17, kVK_F18, kVK_F19,
         ]
-        return fKeys.contains(Int32(keyCode))
+        return fKeys.contains(Int(keyCode))
     }
 
     func resetDisplay() {
