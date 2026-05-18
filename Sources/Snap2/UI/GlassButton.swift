@@ -1,7 +1,8 @@
 import AppKit
 
 /// 玻璃按钮。无边框、悬停高亮、选中态高亮 + 强调描边。
-final class GlassButton: NSButton {
+/// 非 final：PinHoverToolbar.ToolGlassButton 通过继承挂载 toolType 身份。
+class GlassButton: NSButton {
 
     private let bgLayer = CALayer()
     private let strokeLayer = CAShapeLayer()
