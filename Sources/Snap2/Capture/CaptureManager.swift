@@ -46,8 +46,16 @@ final class CaptureManager {
         let overlayWindowIDs = overlayWindows.map { CGWindowID($0.windowNumber) }
         Task { @MainActor in
             for overlay in snapshot {
+                // NSScreen 非 Sendable——await 前在主 actor 上同步把需要的标量提出来，
+                // 避免跨 actor 边界传递引用。
                 let screen = overlay.targetScreen
-                if let snap = await self.captureFullScreen(screen: screen, excludingWindowIDs: overlayWindowIDs) {
+                let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
+                let scale = screen.backingScaleFactor
+                let frameSize = screen.frame.size
+                if let snap = await self.captureFullScreen(
+                    displayID: displayID, scale: scale, frameSize: frameSize,
+                    excludingWindowIDs: overlayWindowIDs)
+                {
                     (overlay.contentView as? SelectionView)?.setFrozenSnapshot(cgImage: snap.cgImage, pointSize: snap.pointSize)
                 }
             }
@@ -55,19 +63,20 @@ final class CaptureManager {
     }
 
     /// 捕获指定屏幕的整屏画面，用于"冻结"桌面。
-    /// 调用方负责在主 actor 收集 overlay 的 windowNumber。
+    /// 调用方负责在主 actor 上从 NSScreen 提取 displayID/scale/frameSize 标量后再传进来——
+    /// 把 NSScreen 留在主 actor，函数内部只跟值类型打交道，跨 await 边界不会引发并发问题。
     /// 返回原始像素 CGImage 与对应的逻辑点尺寸——上层不再走 NSImage round-trip，
     /// 避免 cgImage(forProposedRect:) 在某些机型/版本上把高分图重采样回点级分辨率。
-    private func captureFullScreen(screen: NSScreen, excludingWindowIDs overlayWindowIDs: [CGWindowID]) async -> (cgImage: CGImage, pointSize: NSSize)? {
-        // NSScreen 非 Sendable，await 后跨 actor 边界使用会触发严格并发错误。
-        // 在 await 前把需要的标量提出来，闭包/await 之后只引用值类型。
-        let screenDisplayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
-        let scale = screen.backingScaleFactor
-        let frameSize = screen.frame.size
+    private func captureFullScreen(displayID: CGDirectDisplayID?,
+                                   scale: CGFloat,
+                                   frameSize: NSSize,
+                                   excludingWindowIDs overlayWindowIDs: [CGWindowID]) async
+        -> (cgImage: CGImage, pointSize: NSSize)?
+    {
         do {
             let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
             guard let scDisplay = content.displays.first(where: { display in
-                display.displayID == screenDisplayID
+                display.displayID == displayID
             }) ?? content.displays.first else { return nil }
 
             let selfBundleID = AppInfo.currentBundleID

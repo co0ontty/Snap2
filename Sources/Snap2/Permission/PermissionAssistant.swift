@@ -13,7 +13,10 @@ import Foundation
 /// 4. 检测到已授权 → dismiss 气泡 + 调 `onGranted`。用户点 ← 返回 → dismiss + `onCancel`。
 ///
 /// 单例保证同时最多只有一个气泡，避免重复 present 时多窗口堆叠。
-@MainActor
+///
+/// 不标 @MainActor 是为了能从 NSApplicationDelegate 等非隔离的同步上下文里直接调用——
+/// 调用点（按钮 action、NSWorkspace 通知、Timer RunLoop 回调）天然都在主线程，无需
+/// 编译期的额外保证；强行加 @MainActor 反而会让 AppDelegate 整条链被迫染色。
 final class PermissionAssistant {
 
     static let shared = PermissionAssistant()
@@ -88,9 +91,10 @@ final class PermissionAssistant {
         trackingTimer?.invalidate()
 
         // 单 timer：每 150ms tick 一次，做"窗口跟随 + 周期授权检测"。
+        // 默认在当前 RunLoop（主线程）触发，无需额外 actor 调度。
         let timer = Timer.scheduledTimer(withTimeInterval: 0.15, repeats: true) {
             [weak self] _ in
-            Task { @MainActor in self?.tick() }
+            self?.tick()
         }
         RunLoop.main.add(timer, forMode: .common)
         trackingTimer = timer
@@ -103,7 +107,7 @@ final class PermissionAssistant {
             forName: NSWorkspace.didActivateApplicationNotification,
             object: nil, queue: .main
         ) { [weak self] _ in
-            Task { @MainActor in self?.refreshPosition() }
+            self?.refreshPosition()
         }
 
         refreshPosition()
