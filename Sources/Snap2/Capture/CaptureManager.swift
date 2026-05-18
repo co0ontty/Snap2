@@ -43,7 +43,6 @@ final class CaptureManager {
         // 拿到全屏快照后再 setFrozenSnapshot 让选区下方变成"凝固"的桌面，
         // 避免用户慢慢框选时动态内容（视频/动画）已被划过去。
         let snapshot = overlayWindows
-        let overlayWindowIDs = overlayWindows.map { CGWindowID($0.windowNumber) }
         Task { @MainActor in
             for overlay in snapshot {
                 // NSScreen 非 Sendable——await 前在主 actor 上同步把需要的标量提出来，
@@ -53,8 +52,7 @@ final class CaptureManager {
                 let scale = screen.backingScaleFactor
                 let frameSize = screen.frame.size
                 if let snap = await self.captureFullScreen(
-                    displayID: displayID, scale: scale, frameSize: frameSize,
-                    excludingWindowIDs: overlayWindowIDs)
+                    displayID: displayID, scale: scale, frameSize: frameSize)
                 {
                     (overlay.contentView as? SelectionView)?.setFrozenSnapshot(cgImage: snap.cgImage, pointSize: snap.pointSize)
                 }
@@ -69,8 +67,7 @@ final class CaptureManager {
     /// 避免 cgImage(forProposedRect:) 在某些机型/版本上把高分图重采样回点级分辨率。
     private func captureFullScreen(displayID: CGDirectDisplayID?,
                                    scale: CGFloat,
-                                   frameSize: NSSize,
-                                   excludingWindowIDs overlayWindowIDs: [CGWindowID]) async
+                                   frameSize: NSSize) async
         -> (cgImage: CGImage, pointSize: NSSize)?
     {
         do {
@@ -79,12 +76,22 @@ final class CaptureManager {
                 display.displayID == displayID
             }) ?? content.displays.first else { return nil }
 
+            // 按 application 排除整个 Snap2 进程，而不是按窗口列表过滤。
+            // 旧实现 `content.windows.filter { ... }` 只能匹配 SCShareableContent 抓
+            // 快照那一刻已经在 WindowServer 注册为 on-screen 的窗口；overlay 在
+            // `makeKeyAndOrderFront` 之后到真正"上屏"之间有几帧延迟（外接显示器尤其
+            // 明显），这段时间内拉到的 content.windows 不包含 overlay → overlay 不被
+            // 排除 → SCK 实际截图时 overlay 已经把 30% 黑色蒙版画上去，被一起截进
+            // frozenCGImage，结果就是"桌面截图偏暗"。
+            // 改为按 application 排除后，policy 在 capture 时生效，无论 overlay 何时
+            // 上屏都不会进入截图。
             let selfBundleID = AppInfo.currentBundleID
-            let excludeWindows = content.windows.filter { w in
-                overlayWindowIDs.contains(CGWindowID(w.windowID)) ||
-                w.owningApplication?.bundleIdentifier == selfBundleID
+            let excludeApps = content.applications.filter {
+                $0.bundleIdentifier == selfBundleID
             }
-            let filter = SCContentFilter(display: scDisplay, excludingWindows: excludeWindows)
+            let filter = SCContentFilter(display: scDisplay,
+                                          excludingApplications: excludeApps,
+                                          exceptingWindows: [])
 
             let config = SCStreamConfiguration()
             config.width = Int(frameSize.width * scale)
@@ -167,8 +174,6 @@ final class CaptureManager {
     /// 上层负责自己持有 CGImage 引用做后续 crop/render，避免 cgImage(forProposedRect:)
     /// 在某些机型/macOS 版本下把高分图重采样回点级分辨率（症状：分辨率特别低 + 模糊）。
     func captureInline(rect: NSRect, screen: NSScreen, completion: @escaping (CGImage?, NSSize) -> Void) {
-        let overlayWindowIDs = overlayWindows.map { CGWindowID($0.windowNumber) }
-
         let mainScreenHeight = NSScreen.screens.first?.frame.height ?? 0
         let captureRect = CGRect(
             x: rect.origin.x,
@@ -193,14 +198,14 @@ final class CaptureManager {
                     return
                 }
 
-                // 排除自身所有窗口
+                // 排除自身所有窗口——按 application 而非按窗口列表，理由见 captureFullScreen
                 let selfBundleID = AppInfo.currentBundleID
-                let excludeWindows = content.windows.filter { w in
-                    overlayWindowIDs.contains(CGWindowID(w.windowID)) ||
-                    w.owningApplication?.bundleIdentifier == selfBundleID
+                let excludeApps = content.applications.filter {
+                    $0.bundleIdentifier == selfBundleID
                 }
-
-                let filter = SCContentFilter(display: scDisplay, excludingWindows: excludeWindows)
+                let filter = SCContentFilter(display: scDisplay,
+                                              excludingApplications: excludeApps,
+                                              exceptingWindows: [])
 
                 let config = SCStreamConfiguration()
                 config.sourceRect = captureRect
