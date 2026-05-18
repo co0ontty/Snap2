@@ -266,6 +266,19 @@ notarize_artifact() {
     xcrun stapler staple "${artifact}"
 }
 
+# ──────────────── 卸载同名残留卷 ────────────────
+# 在 CI 上多次 create+attach 后，可能出现 "/Volumes/Snap²"、"/Volumes/Snap² 1" 等残留
+# 会让下一次 hdiutil create 静默失败（被 -quiet 吞掉只剩 exit 1）
+detach_stale_volumes() {
+    local prefix="$1"
+    # /Volumes/Snap² /Volumes/Snap² 1 …
+    while IFS= read -r vol; do
+        [ -z "$vol" ] && continue
+        echo "  卸载残留卷: $vol"
+        hdiutil detach "$vol" -force 2>&1 | sed 's/^/    /' || true
+    done < <(ls -d "/Volumes/${prefix}"* 2>/dev/null || true)
+}
+
 # ──────────────── 创建美化 DMG ────────────────
 # arg1: 源 .app 路径
 # arg2: 输出 .dmg 路径
@@ -280,6 +293,9 @@ create_dmg_for_app() {
 
     rm -rf "${stage}" "${dmg_out}"
     mkdir -p "${stage}/staging"
+
+    # 清理上一次构建残留的同名挂载（CI 上常见）
+    detach_stale_volumes "${DMG_VOLUME_NAME}"
 
     # 把源 .app 改名成统一的 Snap2.app 放进 dmg，免得拖到 Applications 后出现两份不同 bundle id
     cp -R "${source_app}" "${stage}/staging/${APP_BUNDLE}"
@@ -325,12 +341,17 @@ BGEOF
 
     # 1. 创建可读写 DMG
     echo "  创建临时 DMG..."
-    hdiutil create -srcfolder "${stage}/staging" \
+    # 不再用 -quiet，否则 CI 上失败时根因被吞（之前 x86_64 步骤就是这么哑掉的）
+    if ! hdiutil create -srcfolder "${stage}/staging" \
         -volname "${DMG_VOLUME_NAME}" \
         -fs HFS+ \
         -format UDRW \
-        -size 100m \
-        "${rw_path}" -quiet
+        -size 200m \
+        "${rw_path}"; then
+        echo "  hdiutil create 失败，当前挂载状态："
+        hdiutil info | sed 's/^/    /' || true
+        exit 1
+    fi
 
     # 2. 挂载并美化
     echo "  美化 DMG 窗口布局..."
@@ -378,15 +399,20 @@ ASEOF
     sync
     sleep 1
 
-    # 3. 卸载
-    hdiutil detach "${mount_dir}" -quiet 2>/dev/null || hdiutil detach "${mount_dir}" -force -quiet
+    # 3. 卸载（先正常 detach，失败再 force；保留输出以便排查）
+    if ! hdiutil detach "${mount_dir}" 2>&1 | sed 's/^/    /'; then
+        echo "  正常 detach 失败，尝试 force..."
+        hdiutil detach "${mount_dir}" -force 2>&1 | sed 's/^/    /' || true
+    fi
+    # 再扫一遍同名卷，防止本次 detach 没真正卸干净影响下一个 DMG
+    detach_stale_volumes "${DMG_VOLUME_NAME}"
 
     # 4. 转换为压缩只读 DMG
     echo "  压缩为最终 DMG..."
     hdiutil convert "${rw_path}" \
         -format UDZO \
         -imagekey zlib-level=9 \
-        -o "${dmg_out}" -quiet
+        -o "${dmg_out}"
 
     local dmg_size
     dmg_size=$(du -sh "${dmg_out}" | cut -f1)
