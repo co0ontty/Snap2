@@ -245,7 +245,7 @@ private final class OverlayContentView: NSView {
         arrowView.translatesAutoresizingMaskIntoConstraints = false
         arrowView.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: nil)
         arrowView.symbolConfiguration = .init(pointSize: 26, weight: .bold)
-        arrowView.contentTintColor = NSColor.controlAccentColor
+        arrowView.contentTintColor = ClaudeTheme.accent
 
         addSubview(arrowView)
 

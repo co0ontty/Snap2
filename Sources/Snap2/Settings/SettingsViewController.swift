@@ -52,14 +52,14 @@ final class SettingsViewController: NSViewController {
         let (header, subtitle) = headerStrings()
         let titleLabel = NSTextField(labelWithString: header)
         titleLabel.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
-        titleLabel.textColor = NSColor.white.withAlphaComponent(0.95)
+        titleLabel.textColor = ClaudeTheme.ink
         titleLabel.backgroundColor = .clear
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(titleLabel)
 
         let subtitleLabel = NSTextField(labelWithString: subtitle)
         subtitleLabel.font = NSFont.systemFont(ofSize: 12)
-        subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.55)
+        subtitleLabel.textColor = ClaudeTheme.inkSecondary
         subtitleLabel.backgroundColor = .clear
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
         container.addSubview(subtitleLabel)
@@ -103,13 +103,19 @@ final class SettingsViewController: NSViewController {
     // MARK: - 玻璃卡片容器
 
     private func makeCard(in parent: NSView, height: CGFloat? = nil) -> NSView {
-        let card = NSView()
+        let card = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
+            v.layer?.borderColor = ClaudeTheme.stroke.cgColor
+            v.layer?.shadowColor = ClaudeTheme.accent.withAlphaComponent(0.18).cgColor
+        }
         card.wantsLayer = true
-        card.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
         card.layer?.cornerRadius = 14
         card.layer?.cornerCurve = .continuous
-        card.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
         card.layer?.borderWidth = 1
+        // 轻量阴影让卡片浮在玻璃之上
+        card.layer?.shadowOpacity = 1.0
+        card.layer?.shadowRadius = 8
+        card.layer?.shadowOffset = CGSize(width: 0, height: -2)
         card.translatesAutoresizingMaskIntoConstraints = false
         parent.addSubview(card)
         if let h = height {
@@ -124,7 +130,7 @@ final class SettingsViewController: NSViewController {
 
         let titleLabel = NSTextField(labelWithString: label)
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        titleLabel.textColor = NSColor.white.withAlphaComponent(0.88)
+        titleLabel.textColor = ClaudeTheme.ink
         titleLabel.backgroundColor = .clear
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         row.addSubview(titleLabel)
@@ -144,9 +150,7 @@ final class SettingsViewController: NSViewController {
     }
 
     private func makeSeparator(in parent: NSView) -> NSView {
-        let sep = NSView()
-        sep.wantsLayer = true
-        sep.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
+        let sep = AppearanceAwareDivider()
         sep.translatesAutoresizingMaskIntoConstraints = false
         sep.heightAnchor.constraint(equalToConstant: 1).isActive = true
         return sep
@@ -189,7 +193,7 @@ final class SettingsViewController: NSViewController {
                                         : "\(abbreviatePath(currentPath))（默认）"
         let pathLabel = NSTextField(labelWithString: displayText)
         pathLabel.font = NSFont.systemFont(ofSize: 12)
-        pathLabel.textColor = NSColor.white.withAlphaComponent(0.55)
+        pathLabel.textColor = ClaudeTheme.inkSecondary
         pathLabel.backgroundColor = .clear
         pathLabel.lineBreakMode = .byTruncatingMiddle
         // 完整路径作为 tooltip，让长路径用户 hover 即可看清。
@@ -232,7 +236,7 @@ final class SettingsViewController: NSViewController {
 
         let valLabel = NSTextField(labelWithString: "\(Int(savedQuality * 100))%")
         valLabel.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .regular)
-        valLabel.textColor = NSColor.white.withAlphaComponent(0.65)
+        valLabel.textColor = ClaudeTheme.inkSecondary
         valLabel.backgroundColor = .clear
         valLabel.alignment = .right
         valLabel.widthAnchor.constraint(equalToConstant: 40).isActive = true
@@ -326,12 +330,12 @@ final class SettingsViewController: NSViewController {
         let hintIcon = NSImageView()
         hintIcon.image = NSImage(systemSymbolName: "info.circle", accessibilityDescription: nil)?
             .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 11, weight: .regular))
-        hintIcon.contentTintColor = NSColor.white.withAlphaComponent(0.45)
+        hintIcon.contentTintColor = ClaudeTheme.inkTertiary
         hintIcon.translatesAutoresizingMaskIntoConstraints = false
 
         let hint = NSTextField(labelWithString: "点击录制框后按下新的快捷键组合，按 Esc 取消。")
         hint.font = NSFont.systemFont(ofSize: 11)
-        hint.textColor = NSColor.white.withAlphaComponent(0.50)
+        hint.textColor = ClaudeTheme.inkTertiary
         hint.backgroundColor = .clear
 
         let hintStack = NSStackView(views: [hintIcon, hint])
@@ -376,7 +380,7 @@ final class SettingsViewController: NSViewController {
         header.translatesAutoresizingMaskIntoConstraints = false
         let head = NSTextField(labelWithString: title)
         head.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        head.textColor = NSColor.white.withAlphaComponent(0.92)
+        head.textColor = ClaudeTheme.ink
         head.backgroundColor = .clear
         head.translatesAutoresizingMaskIntoConstraints = false
         header.addSubview(head)
@@ -448,11 +452,12 @@ final class SettingsViewController: NSViewController {
         let card = makeCard(in: parent)
 
         // Logo
-        let logoBg = NSView()
+        let logoBg = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.accent.cgColor
+            v.layer?.borderColor = NSColor.white.withAlphaComponent(0.40).cgColor
+        }
         logoBg.wantsLayer = true
-        logoBg.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
         logoBg.layer?.cornerRadius = 18
-        logoBg.layer?.borderColor = NSColor.white.withAlphaComponent(0.30).cgColor
         logoBg.layer?.borderWidth = 1
         logoBg.translatesAutoresizingMaskIntoConstraints = false
 
@@ -469,17 +474,17 @@ final class SettingsViewController: NSViewController {
 
         let appName = NSTextField(labelWithString: "Snap²")
         appName.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
-        appName.textColor = NSColor.white.withAlphaComponent(0.95)
+        appName.textColor = ClaudeTheme.ink
         appName.backgroundColor = .clear
 
         let appVer = NSTextField(labelWithString: "版本 \(appVersion()) (\(appBuild()))")
         appVer.font = NSFont.systemFont(ofSize: 11)
-        appVer.textColor = NSColor.white.withAlphaComponent(0.55)
+        appVer.textColor = ClaudeTheme.inkTertiary
         appVer.backgroundColor = .clear
 
         let desc = NSTextField(labelWithString: "轻盈快捷的 macOS 截图标注工具，纯 Swift + AppKit 构建，无外部依赖。")
         desc.font = NSFont.systemFont(ofSize: 12)
-        desc.textColor = NSColor.white.withAlphaComponent(0.70)
+        desc.textColor = ClaudeTheme.inkSecondary
         desc.backgroundColor = .clear
         desc.maximumNumberOfLines = 0
         desc.lineBreakMode = .byWordWrapping
@@ -528,7 +533,7 @@ final class SettingsViewController: NSViewController {
         for (i, item) in infoRows.enumerated() {
             let valLabel = NSTextField(labelWithString: item.1)
             valLabel.font = NSFont.systemFont(ofSize: 12)
-            valLabel.textColor = NSColor.white.withAlphaComponent(0.65)
+            valLabel.textColor = ClaudeTheme.inkSecondary
             valLabel.backgroundColor = .clear
 
             let row = makeRow(label: item.0, control: valLabel)
@@ -709,8 +714,6 @@ final class HotkeyRecorderView: NSView {
         wantsLayer = true
         layer?.cornerRadius = 8
         layer?.borderWidth = 1
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
 
         let manager = HotkeyManager.shared
         let currentDisplay = KeyCodeMapping.displayString(
@@ -719,7 +722,6 @@ final class HotkeyRecorderView: NSView {
 
         displayLabel = NSTextField(labelWithString: currentDisplay)
         displayLabel.font = NSFont.monospacedSystemFont(ofSize: 13, weight: .medium)
-        displayLabel.textColor = NSColor.white.withAlphaComponent(0.90)
         displayLabel.backgroundColor = .clear
         displayLabel.alignment = .center
         displayLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -729,6 +731,21 @@ final class HotkeyRecorderView: NSView {
             displayLabel.centerXAnchor.constraint(equalTo: centerXAnchor),
             displayLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
         ])
+
+        applyIdleStyle()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        if !isRecording { applyIdleStyle() }
+    }
+
+    private func applyIdleStyle() {
+        effectiveAppearance.performAsCurrent {
+            layer?.borderColor = ClaudeTheme.stroke.cgColor
+            layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
+            displayLabel.textColor = ClaudeTheme.ink
+        }
     }
 
     override func mouseDown(with event: NSEvent) {
@@ -738,10 +755,12 @@ final class HotkeyRecorderView: NSView {
     private func startRecording() {
         isRecording = true
         displayLabel.stringValue = "请按下快捷键…"
-        displayLabel.textColor = NSColor.controlAccentColor
-        layer?.borderColor = NSColor.controlAccentColor.cgColor
+        effectiveAppearance.performAsCurrent {
+            displayLabel.textColor = ClaudeTheme.accent
+            layer?.borderColor = ClaudeTheme.accent.cgColor
+            layer?.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.12).cgColor
+        }
         layer?.borderWidth = 2
-        layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.12).cgColor
 
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
             self?.handleKeyEvent(event)
@@ -751,10 +770,8 @@ final class HotkeyRecorderView: NSView {
 
     private func stopRecording() {
         isRecording = false
-        displayLabel.textColor = NSColor.white.withAlphaComponent(0.90)
-        layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
         layer?.borderWidth = 1
-        layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
+        applyIdleStyle()
 
         if let monitor = localMonitor {
             NSEvent.removeMonitor(monitor)
@@ -819,10 +836,8 @@ final class HotkeyRecorderView: NSView {
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.6) { [weak self] in
             guard let self = self else { return }
             self.displayLabel.stringValue = originalText
-            self.displayLabel.textColor = NSColor.white.withAlphaComponent(0.90)
-            self.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
             self.layer?.borderWidth = 1
-            self.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
+            self.applyIdleStyle()
         }
     }
 

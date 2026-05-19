@@ -14,7 +14,7 @@ class GlassButton: NSButton {
         didSet { refreshState() }
     }
 
-    var accentColor: NSColor = .controlAccentColor {
+    var accentColor: NSColor = ClaudeTheme.accent {
         didSet { refreshState() }
     }
 

@@ -42,8 +42,10 @@ final class SelectionView: NSView {
     private static let mosaicCIContext = CIContext()
 
     private var currentTool: AnnotationToolType = .arrow
-    private var currentColor: NSColor = AnnotationPalette.colors[0]
-    private var currentLineWidth: CGFloat = LineWidthLevel.medium.rawValue
+    /// 颜色与线宽都从 UserDefaults 恢复上次会话的选择。
+    /// 工具类型刻意不持久化——一次任务画箭头不代表下次还想画箭头。
+    private var currentColor: NSColor = AnnotationPreferences.loadColor()
+    private var currentLineWidth: CGFloat = AnnotationPreferences.loadLineWidth().rawValue
 
     private let toolRegistry = AnnotationToolRegistry.shared
 
@@ -225,7 +227,7 @@ final class SelectionView: NSView {
     private func drawAnnotationFrame(in context: CGContext) {
         // 标注模式下，选区只画一道发光的强调色边框
         context.saveGState()
-        NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
+        ClaudeTheme.accent.withAlphaComponent(0.85).setStroke()
         context.setLineWidth(1.5)
         context.stroke(selectionRect)
         context.restoreGState()
@@ -253,7 +255,7 @@ final class SelectionView: NSView {
             context.setShadow(offset: .zero, blur: 0, color: nil)
 
             context.addPath(path)
-            NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
+            ClaudeTheme.accent.withAlphaComponent(0.85).setStroke()
             context.setLineWidth(1.0)
             context.strokePath()
         }
@@ -1520,9 +1522,11 @@ extension SelectionView: GlassToolbarDelegate {
     }
     func toolbarDidPickColor(_ color: NSColor) {
         currentColor = color
+        AnnotationPreferences.saveColor(color)
     }
     func toolbarDidPickWidth(_ width: CGFloat) {
         currentLineWidth = width
+        AnnotationPreferences.saveLineWidth(width)
     }
     func toolbarDidTapUndo() { performUndo() }
     func toolbarDidTapSave() { performSave() }

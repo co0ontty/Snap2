@@ -63,7 +63,8 @@ final class SettingsWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.backgroundColor = .clear
         window.center()
-        window.appearance = NSAppearance(named: .vibrantDark)
+        // 跟随系统明暗：浅色给米白纸面、深色给暖深棕
+        window.appearance = nil
 
         super.init(window: window)
         buildLayout(size: size)
@@ -84,29 +85,8 @@ final class SettingsWindowController: NSWindowController {
     private func buildLayout(size: NSSize) {
         guard let contentView = window?.contentView else { return }
 
-        // 全窗口玻璃底
-        let blur = NSVisualEffectView(frame: contentView.bounds)
-        blur.material = .underWindowBackground
-        blur.blendingMode = .behindWindow
-        blur.state = .active
-        blur.autoresizingMask = [.width, .height]
-        contentView.addSubview(blur)
-
-        // 顶部高光
-        let highlightHost = NSView(frame: contentView.bounds)
-        highlightHost.autoresizingMask = [.width, .height]
-        highlightHost.wantsLayer = true
-        let highlight = CAGradientLayer()
-        highlight.colors = [
-            NSColor.white.withAlphaComponent(0.18).cgColor,
-            NSColor.white.withAlphaComponent(0.0).cgColor,
-        ]
-        highlight.locations = [0.0, 1.0]
-        highlight.startPoint = CGPoint(x: 0.5, y: 1.0)
-        highlight.endPoint = CGPoint(x: 0.5, y: 0.55)
-        highlight.frame = highlightHost.bounds
-        highlightHost.layer?.addSublayer(highlight)
-        contentView.addSubview(highlightHost)
+        // 全窗口液态玻璃底（米白 tint + 顶光 + 底暖光，自动跟随系统明暗）
+        ClaudeGlass.install(into: contentView)
 
         // —— 侧边栏（液态玻璃）——
         let sidebarWidth: CGFloat = 220
@@ -118,9 +98,7 @@ final class SettingsWindowController: NSWindowController {
         contentView.addSubview(sidebar)
 
         // 侧边栏右侧 1px 分隔线
-        let divider = NSView()
-        divider.wantsLayer = true
-        divider.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
+        let divider = AppearanceAwareDivider()
         divider.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(divider)
 
@@ -131,11 +109,12 @@ final class SettingsWindowController: NSWindowController {
         brand.alignment = .centerY
         brand.translatesAutoresizingMaskIntoConstraints = false
 
-        let brandIconBg = NSView()
+        let brandIconBg = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.92).cgColor
+            v.layer?.borderColor = NSColor.white.withAlphaComponent(0.45).cgColor
+        }
         brandIconBg.wantsLayer = true
-        brandIconBg.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.85).cgColor
         brandIconBg.layer?.cornerRadius = 8
-        brandIconBg.layer?.borderColor = NSColor.white.withAlphaComponent(0.30).cgColor
         brandIconBg.layer?.borderWidth = 1
         brandIconBg.translatesAutoresizingMaskIntoConstraints = false
         brandIconBg.widthAnchor.constraint(equalToConstant: 30).isActive = true
@@ -159,12 +138,12 @@ final class SettingsWindowController: NSWindowController {
 
         let brandTitle = NSTextField(labelWithString: "Snap²")
         brandTitle.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        brandTitle.textColor = NSColor.white.withAlphaComponent(0.95)
+        brandTitle.textColor = ClaudeTheme.ink
         brandTitle.backgroundColor = .clear
 
         let brandSub = NSTextField(labelWithString: "截图 · 标注")
         brandSub.font = NSFont.systemFont(ofSize: 10)
-        brandSub.textColor = NSColor.white.withAlphaComponent(0.55)
+        brandSub.textColor = ClaudeTheme.inkSecondary
         brandSub.backgroundColor = .clear
 
         brandText.addArrangedSubview(brandTitle)
@@ -362,27 +341,28 @@ final class SidebarItemView: NSView {
         if let img = NSImage(systemSymbolName: icon, accessibilityDescription: title) {
             iconView.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .medium))
         }
-        iconView.contentTintColor = NSColor.white.withAlphaComponent(0.75)
+        iconView.contentTintColor = ClaudeTheme.inkSecondary
         iconView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(iconView)
 
         titleLabel.stringValue = title
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        titleLabel.textColor = NSColor.white.withAlphaComponent(0.85)
+        titleLabel.textColor = ClaudeTheme.ink
         titleLabel.backgroundColor = .clear
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
         subtitleLabel.stringValue = subtitle
         subtitleLabel.font = NSFont.systemFont(ofSize: 10)
-        subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.45)
+        subtitleLabel.textColor = ClaudeTheme.inkTertiary
         subtitleLabel.backgroundColor = .clear
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(subtitleLabel)
 
-        let iconBg = NSView()
+        let iconBg = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
+        }
         iconBg.wantsLayer = true
-        iconBg.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
         iconBg.layer?.cornerRadius = 7
         iconBg.translatesAutoresizingMaskIntoConstraints = false
         addSubview(iconBg, positioned: .below, relativeTo: iconView)
@@ -441,30 +421,37 @@ final class SidebarItemView: NSView {
         refresh()
     }
 
-    private func refresh() {
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(Glass.animDuration)
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
 
-        if isSelected {
-            bgLayer.backgroundColor = NSColor.white.withAlphaComponent(0.16).cgColor
-            strokeLayer.strokeColor = NSColor.white.withAlphaComponent(0.22).cgColor
-            titleLabel.textColor = NSColor.white
-            subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.65)
-            iconView.contentTintColor = NSColor.white
-        } else if isHovered {
-            bgLayer.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
-            strokeLayer.strokeColor = NSColor.white.withAlphaComponent(0.10).cgColor
-            titleLabel.textColor = NSColor.white.withAlphaComponent(0.92)
-            subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.55)
-            iconView.contentTintColor = NSColor.white.withAlphaComponent(0.92)
-        } else {
-            bgLayer.backgroundColor = NSColor.clear.cgColor
-            strokeLayer.strokeColor = NSColor.clear.cgColor
-            titleLabel.textColor = NSColor.white.withAlphaComponent(0.85)
-            subtitleLabel.textColor = NSColor.white.withAlphaComponent(0.45)
-            iconView.contentTintColor = NSColor.white.withAlphaComponent(0.78)
+    private func refresh() {
+        effectiveAppearance.performAsCurrent {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(Glass.animDuration)
+
+            if isSelected {
+                bgLayer.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.18).cgColor
+                strokeLayer.strokeColor = ClaudeTheme.accent.withAlphaComponent(0.55).cgColor
+                titleLabel.textColor = ClaudeTheme.ink
+                subtitleLabel.textColor = ClaudeTheme.inkSecondary
+                iconView.contentTintColor = ClaudeTheme.accent
+            } else if isHovered {
+                bgLayer.backgroundColor = ClaudeTheme.creamCardHover.cgColor
+                strokeLayer.strokeColor = ClaudeTheme.stroke.cgColor
+                titleLabel.textColor = ClaudeTheme.ink
+                subtitleLabel.textColor = ClaudeTheme.inkSecondary
+                iconView.contentTintColor = ClaudeTheme.ink
+            } else {
+                bgLayer.backgroundColor = NSColor.clear.cgColor
+                strokeLayer.strokeColor = NSColor.clear.cgColor
+                titleLabel.textColor = ClaudeTheme.ink
+                subtitleLabel.textColor = ClaudeTheme.inkTertiary
+                iconView.contentTintColor = ClaudeTheme.inkSecondary
+            }
+            CATransaction.commit()
         }
-        CATransaction.commit()
     }
 }
 
@@ -520,10 +507,15 @@ final class VersionLinkButton: NSView {
     override func mouseExited(with event: NSEvent)  { isHovered = false; refresh() }
     override func mouseDown(with event: NSEvent)    { onClick?() }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+
     private func refresh() {
-        label.textColor = isHovered
-            ? NSColor.white.withAlphaComponent(0.85)
-            : NSColor.white.withAlphaComponent(0.45)
+        effectiveAppearance.performAsCurrent {
+            label.textColor = isHovered ? ClaudeTheme.ink : ClaudeTheme.inkTertiary
+        }
     }
 }
 
@@ -619,8 +611,14 @@ final class UpgradePillButton: NSView {
     override func mouseExited(with event: NSEvent)  { isHovered = false; refresh() }
     override func mouseDown(with event: NSEvent)    { onClick?() }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+
     private func refresh() {
-        let base = NSColor.controlAccentColor
-        bgLayer.backgroundColor = (isHovered ? base : base.withAlphaComponent(0.85)).cgColor
+        effectiveAppearance.performAsCurrent {
+            bgLayer.backgroundColor = (isHovered ? ClaudeTheme.accentPressed : ClaudeTheme.accent).cgColor
+        }
     }
 }

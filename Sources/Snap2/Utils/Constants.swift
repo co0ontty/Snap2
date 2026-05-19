@@ -48,6 +48,10 @@ enum UDKey {
     static let lastKnownLatestVersion = "lastKnownLatestVersion"
     /// 是否订阅 Beta（commit）更新通道
     static let betaUpdates = "betaUpdates"
+    /// 标注工具栏上次选中的颜色（在 AnnotationPalette.colors 中的索引）
+    static let annotationColorIndex = "annotationColorIndex"
+    /// 标注工具栏上次选中的线宽（LineWidthLevel.rawValue）
+    static let annotationLineWidth = "annotationLineWidth"
 }
 
 /// 回车键行为
@@ -58,6 +62,43 @@ enum EnterAction: String {
     static var current: EnterAction {
         let raw = UserDefaults.standard.string(forKey: UDKey.enterAction) ?? "copy"
         return EnterAction(rawValue: raw) ?? .copy
+    }
+}
+
+/// 标注工具栏的颜色 / 线宽偏好持久化。
+/// 颜色以"在 AnnotationPalette.colors 中的索引"持久化，结构简单且不依赖颜色空间序列化。
+enum AnnotationPreferences {
+    static func loadColor() -> NSColor {
+        let defaults = UserDefaults.standard
+        // object(forKey:) != nil 区分 "用户存过 0" 与 "从未存过"
+        guard defaults.object(forKey: UDKey.annotationColorIndex) != nil else {
+            return AnnotationPalette.colors[0]
+        }
+        let idx = defaults.integer(forKey: UDKey.annotationColorIndex)
+        let palette = AnnotationPalette.colors
+        guard idx >= 0, idx < palette.count else { return palette[0] }
+        return palette[idx]
+    }
+
+    static func saveColor(_ color: NSColor) {
+        guard let idx = AnnotationPalette.colors.firstIndex(where: { $0.isEqualSrgb(color) }) else {
+            // 不在调色板里的颜色（理论上不会发生）就不写，避免污染配置
+            return
+        }
+        UserDefaults.standard.set(idx, forKey: UDKey.annotationColorIndex)
+    }
+
+    static func loadLineWidth() -> LineWidthLevel {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: UDKey.annotationLineWidth) != nil else {
+            return .medium
+        }
+        let raw = CGFloat(defaults.double(forKey: UDKey.annotationLineWidth))
+        return LineWidthLevel.allCases.first { $0.rawValue == raw } ?? .medium
+    }
+
+    static func saveLineWidth(_ width: CGFloat) {
+        UserDefaults.standard.set(Double(width), forKey: UDKey.annotationLineWidth)
     }
 }
 

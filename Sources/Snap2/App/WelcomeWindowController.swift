@@ -26,7 +26,8 @@ final class WelcomeWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.center()
         window.backgroundColor = .clear
-        window.appearance = NSAppearance(named: .vibrantDark)
+        // 跟随系统明暗
+        window.appearance = nil
 
         super.init(window: window)
         setupContent(size: size)
@@ -38,38 +39,19 @@ final class WelcomeWindowController: NSWindowController {
     private func setupContent(size: NSSize) {
         guard let contentView = window?.contentView else { return }
 
-        // 全屏液态玻璃底
-        let blur = NSVisualEffectView(frame: contentView.bounds)
-        blur.material = .underWindowBackground
-        blur.blendingMode = .behindWindow
-        blur.state = .active
-        blur.autoresizingMask = [.width, .height]
-        contentView.addSubview(blur)
-
-        // 顶部柔和高光
-        let highlightHost = NSView(frame: contentView.bounds)
-        highlightHost.autoresizingMask = [.width, .height]
-        highlightHost.wantsLayer = true
-        let highlight = CAGradientLayer()
-        highlight.colors = [
-            NSColor.white.withAlphaComponent(0.22).cgColor,
-            NSColor.white.withAlphaComponent(0.0).cgColor,
-        ]
-        highlight.locations = [0.0, 1.0]
-        highlight.startPoint = CGPoint(x: 0.5, y: 1.0)
-        highlight.endPoint = CGPoint(x: 0.5, y: 0.45)
-        highlight.frame = highlightHost.bounds
-        highlightHost.layer?.addSublayer(highlight)
-        contentView.addSubview(highlightHost)
+        // 全屏液态玻璃底（米白 tint + 顶光 + 底暖光，自动跟随系统明暗）
+        ClaudeGlass.install(into: contentView)
 
         // 顶部 Logo + 标题
         let logoSize: CGFloat = 84
         let logoY = size.height - 152
-        let logo = NSView(frame: NSRect(x: (size.width - logoSize) / 2, y: logoY, width: logoSize, height: logoSize))
+        let logo = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.accent.cgColor
+            v.layer?.borderColor = NSColor.white.withAlphaComponent(0.40).cgColor
+        }
+        logo.frame = NSRect(x: (size.width - logoSize) / 2, y: logoY, width: logoSize, height: logoSize)
         logo.wantsLayer = true
-        logo.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
         logo.layer?.cornerRadius = 22
-        logo.layer?.borderColor = NSColor.white.withAlphaComponent(0.18).cgColor
         logo.layer?.borderWidth = 1
         contentView.addSubview(logo)
 
@@ -77,13 +59,13 @@ final class WelcomeWindowController: NSWindowController {
         if let img = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: nil) {
             let cfg = NSImage.SymbolConfiguration(pointSize: 44, weight: .light)
             icon.image = img.withSymbolConfiguration(cfg)
-            icon.contentTintColor = NSColor.white.withAlphaComponent(0.95)
+            icon.contentTintColor = .white
         }
         logo.addSubview(icon)
 
         let title = NSTextField(labelWithString: "Snap²")
         title.font = NSFont.systemFont(ofSize: 32, weight: .semibold)
-        title.textColor = NSColor.white
+        title.textColor = ClaudeTheme.ink
         title.backgroundColor = .clear
         title.alignment = .center
         title.frame = NSRect(x: 0, y: logoY - 50, width: size.width, height: 40)
@@ -91,7 +73,7 @@ final class WelcomeWindowController: NSWindowController {
 
         let subtitle = NSTextField(labelWithString: "轻盈快捷的 macOS 截图标注工具")
         subtitle.font = NSFont.systemFont(ofSize: 13)
-        subtitle.textColor = NSColor.white.withAlphaComponent(0.65)
+        subtitle.textColor = ClaudeTheme.inkSecondary
         subtitle.backgroundColor = .clear
         subtitle.alignment = .center
         subtitle.frame = NSRect(x: 0, y: logoY - 74, width: size.width, height: 22)
@@ -119,24 +101,26 @@ final class WelcomeWindowController: NSWindowController {
         }
 
         // 权限提示
-        let permBox = NSView(frame: NSRect(x: 60, y: 78, width: size.width - 120, height: 48))
+        let permBox = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
+            v.layer?.borderColor = ClaudeTheme.stroke.cgColor
+        }
+        permBox.frame = NSRect(x: 60, y: 78, width: size.width - 120, height: 48)
         permBox.wantsLayer = true
-        permBox.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.08).cgColor
         permBox.layer?.cornerRadius = 14
-        permBox.layer?.borderColor = NSColor.white.withAlphaComponent(0.14).cgColor
         permBox.layer?.borderWidth = 1
         contentView.addSubview(permBox)
 
         let permIcon = NSImageView(frame: NSRect(x: 14, y: 12, width: 24, height: 24))
         if let img = NSImage(systemSymbolName: "lock.shield", accessibilityDescription: nil) {
             permIcon.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-            permIcon.contentTintColor = NSColor.white.withAlphaComponent(0.8)
+            permIcon.contentTintColor = ClaudeTheme.accent
         }
         permBox.addSubview(permIcon)
 
         let permLabel = NSTextField(labelWithString: "需要「屏幕录制」权限。点击下方按钮后，将打开系统设置授权。")
         permLabel.font = NSFont.systemFont(ofSize: 11)
-        permLabel.textColor = NSColor.white.withAlphaComponent(0.72)
+        permLabel.textColor = ClaudeTheme.inkSecondary
         permLabel.backgroundColor = .clear
         permLabel.frame = NSRect(x: 46, y: 14, width: permBox.frame.width - 60, height: 20)
         permBox.addSubview(permLabel)
@@ -154,36 +138,40 @@ final class WelcomeWindowController: NSWindowController {
     }
 
     private func addFeatureCell(in container: NSView, frame: NSRect, symbol: String, title: String, desc: String) {
-        let cell = NSView(frame: frame)
+        let cell = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
+            v.layer?.borderColor = ClaudeTheme.stroke.cgColor
+        }
+        cell.frame = frame
         cell.wantsLayer = true
-        cell.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
         cell.layer?.cornerRadius = 14
-        cell.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
         cell.layer?.borderWidth = 1
 
-        let iconBg = NSView(frame: NSRect(x: 12, y: (frame.height - 32) / 2, width: 32, height: 32))
+        let iconBg = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.16).cgColor
+        }
+        iconBg.frame = NSRect(x: 12, y: (frame.height - 32) / 2, width: 32, height: 32)
         iconBg.wantsLayer = true
-        iconBg.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.10).cgColor
         iconBg.layer?.cornerRadius = 9
         cell.addSubview(iconBg)
 
         let icon = NSImageView(frame: NSRect(x: 0, y: 0, width: 32, height: 32))
         if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
             icon.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-            icon.contentTintColor = NSColor.white.withAlphaComponent(0.92)
+            icon.contentTintColor = ClaudeTheme.accent
         }
         iconBg.addSubview(icon)
 
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = NSColor.white.withAlphaComponent(0.95)
+        titleLabel.textColor = ClaudeTheme.ink
         titleLabel.backgroundColor = .clear
         titleLabel.frame = NSRect(x: 54, y: frame.height - 30, width: frame.width - 64, height: 18)
         cell.addSubview(titleLabel)
 
         let descLabel = NSTextField(labelWithString: desc)
         descLabel.font = NSFont.systemFont(ofSize: 11)
-        descLabel.textColor = NSColor.white.withAlphaComponent(0.62)
+        descLabel.textColor = ClaudeTheme.inkSecondary
         descLabel.backgroundColor = .clear
         descLabel.frame = NSRect(x: 54, y: 10, width: frame.width - 64, height: 16)
         cell.addSubview(descLabel)
@@ -316,18 +304,25 @@ final class WelcomeAccentButton: NSButton {
         CATransaction.commit()
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+
     private func refresh() {
-        let accent = NSColor.controlAccentColor
         let topAlpha: CGFloat = isPressed ? 0.85 : (isHovered ? 1.0 : 0.95)
         let botAlpha: CGFloat = isPressed ? 0.65 : (isHovered ? 0.85 : 0.78)
 
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(Glass.animDuration)
-        bgLayer.colors = [
-            accent.withAlphaComponent(topAlpha).cgColor,
-            accent.withAlphaComponent(botAlpha).cgColor
-        ]
-        strokeLayer.strokeColor = NSColor.white.withAlphaComponent(0.30).cgColor
-        CATransaction.commit()
+        effectiveAppearance.performAsCurrent {
+            let accent = isPressed ? ClaudeTheme.accentPressed : ClaudeTheme.accent
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(Glass.animDuration)
+            bgLayer.colors = [
+                accent.withAlphaComponent(topAlpha).cgColor,
+                accent.withAlphaComponent(botAlpha).cgColor
+            ]
+            strokeLayer.strokeColor = NSColor.white.withAlphaComponent(0.45).cgColor
+            CATransaction.commit()
+        }
     }
 }
