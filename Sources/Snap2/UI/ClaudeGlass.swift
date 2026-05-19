@@ -95,8 +95,8 @@ final class ClaudeGlassHostView: NSView {
     }
 
     private func refreshColors() {
-        // appearance.performAsCurrent 让 dynamic NSColor 在当前 effectiveAppearance 下取值
-        effectiveAppearance.performAsCurrent {
+        // performAsCurrentDrawingAppearance 让 dynamic NSColor 在当前 effectiveAppearance 下取 cgColor
+        effectiveAppearance.performAsCurrentDrawingAppearance {
             CATransaction.begin()
             CATransaction.setDisableActions(true)
             tintLayer.backgroundColor = ClaudeTheme.cream.withAlphaComponent(0.55).cgColor
@@ -140,7 +140,7 @@ final class AppearanceAwareView: NSView {
     }
 
     private func refresh() {
-        effectiveAppearance.performAsCurrent { apply(self) }
+        effectiveAppearance.performAsCurrentDrawingAppearance { apply(self) }
     }
 }
 
@@ -161,7 +161,7 @@ final class AppearanceAwareDivider: NSView {
     }
 
     private func refresh() {
-        effectiveAppearance.performAsCurrent {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.backgroundColor = ClaudeTheme.hairline.cgColor
         }
     }

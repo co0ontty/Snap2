@@ -313,7 +313,7 @@ final class WelcomeAccentButton: NSButton {
         let topAlpha: CGFloat = isPressed ? 0.85 : (isHovered ? 1.0 : 0.95)
         let botAlpha: CGFloat = isPressed ? 0.65 : (isHovered ? 0.85 : 0.78)
 
-        effectiveAppearance.performAsCurrent {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
             let accent = isPressed ? ClaudeTheme.accentPressed : ClaudeTheme.accent
             CATransaction.begin()
             CATransaction.setAnimationDuration(Glass.animDuration)

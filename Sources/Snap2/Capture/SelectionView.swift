@@ -41,9 +41,8 @@ final class SelectionView: NSView {
     /// 复用的 CIContext（开销大，避免每次新建）
     private static let mosaicCIContext = CIContext()
 
-    private var currentTool: AnnotationToolType = .arrow
-    /// 颜色与线宽都从 UserDefaults 恢复上次会话的选择。
-    /// 工具类型刻意不持久化——一次任务画箭头不代表下次还想画箭头。
+    /// 工具 / 颜色 / 线宽都从 UserDefaults 恢复上次会话的选择。
+    private var currentTool: AnnotationToolType = AnnotationPreferences.loadTool()
     private var currentColor: NSColor = AnnotationPreferences.loadColor()
     private var currentLineWidth: CGFloat = AnnotationPreferences.loadLineWidth().rawValue
 
@@ -615,6 +614,7 @@ final class SelectionView: NSView {
         {
             let tool = AnnotationToolType(rawValue: digit - 1)!
             currentTool = tool
+            AnnotationPreferences.saveTool(tool)
             toolbarView?.setSelectedTool(tool)
             return
         }
@@ -1519,6 +1519,7 @@ final class SelectionView: NSView {
 extension SelectionView: GlassToolbarDelegate {
     func toolbarDidPickTool(_ tool: AnnotationToolType) {
         currentTool = tool
+        AnnotationPreferences.saveTool(tool)
     }
     func toolbarDidPickColor(_ color: NSColor) {
         currentColor = color

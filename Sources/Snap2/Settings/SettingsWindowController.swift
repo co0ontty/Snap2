@@ -427,7 +427,7 @@ final class SidebarItemView: NSView {
     }
 
     private func refresh() {
-        effectiveAppearance.performAsCurrent {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
             CATransaction.begin()
             CATransaction.setAnimationDuration(Glass.animDuration)
 
@@ -513,7 +513,7 @@ final class VersionLinkButton: NSView {
     }
 
     private func refresh() {
-        effectiveAppearance.performAsCurrent {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
             label.textColor = isHovered ? ClaudeTheme.ink : ClaudeTheme.inkTertiary
         }
     }
@@ -617,7 +617,7 @@ final class UpgradePillButton: NSView {
     }
 
     private func refresh() {
-        effectiveAppearance.performAsCurrent {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
             bgLayer.backgroundColor = (isHovered ? ClaudeTheme.accentPressed : ClaudeTheme.accent).cgColor
         }
     }

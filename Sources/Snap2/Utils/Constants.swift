@@ -52,6 +52,8 @@ enum UDKey {
     static let annotationColorIndex = "annotationColorIndex"
     /// 标注工具栏上次选中的线宽（LineWidthLevel.rawValue）
     static let annotationLineWidth = "annotationLineWidth"
+    /// 标注工具栏上次选中的工具（AnnotationToolType.rawValue）
+    static let annotationTool = "annotationTool"
 }
 
 /// 回车键行为
@@ -99,6 +101,19 @@ enum AnnotationPreferences {
 
     static func saveLineWidth(_ width: CGFloat) {
         UserDefaults.standard.set(Double(width), forKey: UDKey.annotationLineWidth)
+    }
+
+    static func loadTool() -> AnnotationToolType {
+        let defaults = UserDefaults.standard
+        guard defaults.object(forKey: UDKey.annotationTool) != nil else {
+            return .arrow
+        }
+        let raw = defaults.integer(forKey: UDKey.annotationTool)
+        return AnnotationToolType(rawValue: raw) ?? .arrow
+    }
+
+    static func saveTool(_ tool: AnnotationToolType) {
+        UserDefaults.standard.set(tool.rawValue, forKey: UDKey.annotationTool)
     }
 }
 

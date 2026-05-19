@@ -741,7 +741,7 @@ final class HotkeyRecorderView: NSView {
     }
 
     private func applyIdleStyle() {
-        effectiveAppearance.performAsCurrent {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.borderColor = ClaudeTheme.stroke.cgColor
             layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
             displayLabel.textColor = ClaudeTheme.ink
@@ -755,7 +755,7 @@ final class HotkeyRecorderView: NSView {
     private func startRecording() {
         isRecording = true
         displayLabel.stringValue = "请按下快捷键…"
-        effectiveAppearance.performAsCurrent {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
             displayLabel.textColor = ClaudeTheme.accent
             layer?.borderColor = ClaudeTheme.accent.cgColor
             layer?.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.12).cgColor
