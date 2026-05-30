@@ -44,7 +44,7 @@ final class SettingsViewController: NSViewController {
     required init?(coder: NSCoder) { fatalError() }
 
     override func loadView() {
-        let container = NSView(frame: NSRect(x: 0, y: 0, width: 560, height: 500))
+        let container = NSView(frame: NSRect(x: 0, y: 0, width: 600, height: 540))
         container.wantsLayer = true
         self.view = container
 
@@ -71,18 +71,18 @@ final class SettingsViewController: NSViewController {
 
         NSLayoutConstraint.activate([
             // 顶部留出 titlebar
-            titleLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 38),
-            titleLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 32),
-            titleLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -32),
+            titleLabel.topAnchor.constraint(equalTo: container.topAnchor, constant: 42),
+            titleLabel.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 36),
+            titleLabel.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -36),
 
             subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
 
-            content.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 24),
-            content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 28),
-            content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
-            content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -24),
+            content.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 28),
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 32),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -32),
+            content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -28),
         ])
 
         switch settingsType {
@@ -114,8 +114,8 @@ final class SettingsViewController: NSViewController {
         card.layer?.borderWidth = 1
         // 轻量阴影让卡片浮在玻璃之上
         card.layer?.shadowOpacity = 1.0
-        card.layer?.shadowRadius = 8
-        card.layer?.shadowOffset = CGSize(width: 0, height: -2)
+        card.layer?.shadowRadius = 10
+        card.layer?.shadowOffset = CGSize(width: 0, height: -3)
         card.translatesAutoresizingMaskIntoConstraints = false
         parent.addSubview(card)
         if let h = height {
@@ -147,6 +147,39 @@ final class SettingsViewController: NSViewController {
         ])
         row.heightAnchor.constraint(equalToConstant: 48).isActive = true
         return row
+    }
+
+    private func makeSectionIntro(title: String, detail: String) -> NSView {
+        let wrap = NSView()
+        wrap.translatesAutoresizingMaskIntoConstraints = false
+
+        let titleLabel = NSTextField(labelWithString: title)
+        titleLabel.font = NSFont.systemFont(ofSize: 11, weight: .semibold)
+        titleLabel.textColor = ClaudeTheme.accent
+        titleLabel.backgroundColor = .clear
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        let detailLabel = NSTextField(labelWithString: detail)
+        detailLabel.font = NSFont.systemFont(ofSize: 12)
+        detailLabel.textColor = ClaudeTheme.inkSecondary
+        detailLabel.backgroundColor = .clear
+        detailLabel.translatesAutoresizingMaskIntoConstraints = false
+
+        wrap.addSubview(titleLabel)
+        wrap.addSubview(detailLabel)
+
+        NSLayoutConstraint.activate([
+            titleLabel.topAnchor.constraint(equalTo: wrap.topAnchor),
+            titleLabel.leadingAnchor.constraint(equalTo: wrap.leadingAnchor),
+            titleLabel.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
+
+            detailLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 4),
+            detailLabel.leadingAnchor.constraint(equalTo: wrap.leadingAnchor),
+            detailLabel.trailingAnchor.constraint(equalTo: wrap.trailingAnchor),
+            detailLabel.bottomAnchor.constraint(equalTo: wrap.bottomAnchor),
+        ])
+
+        return wrap
     }
 
     private func makeSeparator(in parent: NSView) -> NSView {
@@ -301,7 +334,9 @@ final class SettingsViewController: NSViewController {
         ])
 
         // —— 整体布局 ——
-        let mainStack = NSStackView(views: [card1, card2, card3])
+        let intro = makeSectionIntro(title: "工作流", detail: "应用启动、截图导出和更新通道在这里统一配置")
+
+        let mainStack = NSStackView(views: [intro, card1, card2, card3])
         mainStack.orientation = .vertical
         mainStack.spacing = 14
         mainStack.alignment = .leading
@@ -344,8 +379,10 @@ final class SettingsViewController: NSViewController {
         hintStack.alignment = .centerY
         hintStack.translatesAutoresizingMaskIntoConstraints = false
 
+        let intro = makeSectionIntro(title: "快捷键录制", detail: "为截图和录屏分别设置全局快捷键，修改后立即生效")
+
         // 主栈
-        let mainStack = NSStackView(views: [captureCard, recordCard, hintStack])
+        let mainStack = NSStackView(views: [intro, captureCard, recordCard, hintStack])
         mainStack.orientation = .vertical
         mainStack.spacing = 14
         mainStack.alignment = .leading
@@ -553,7 +590,9 @@ final class SettingsViewController: NSViewController {
             infoStack.bottomAnchor.constraint(equalTo: infoCard.bottomAnchor),
         ])
 
-        let mainStack = NSStackView(views: [card, infoCard])
+        let intro = makeSectionIntro(title: "应用信息", detail: "查看当前版本、运行环境和底层能力概览")
+
+        let mainStack = NSStackView(views: [intro, card, infoCard])
         mainStack.orientation = .vertical
         mainStack.spacing = 14
         mainStack.alignment = .leading
