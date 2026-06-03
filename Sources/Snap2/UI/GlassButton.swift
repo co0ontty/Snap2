@@ -121,31 +121,39 @@ class GlassButton: NSButton {
         CATransaction.commit()
     }
 
-    private func refreshState() {
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(Glass.animDuration)
-        if isDestructive {
-            // 危险按钮：常态保持低调（0.08 几乎透明），hover/press 才出红色高亮，
-            // 避免在工具栏一排灰白按钮中"反客为主"占走视觉焦点。
-            let alpha: CGFloat = isPressed ? 0.40 : (isHovered ? 0.28 : 0.08)
-            bgLayer.backgroundColor = accentColor.withAlphaComponent(alpha).cgColor
-        } else if isPressed {
-            bgLayer.backgroundColor = Glass.pressedFill.cgColor
-        } else if isSelected {
-            bgLayer.backgroundColor = Glass.selectedFill.cgColor
-        } else if isHovered {
-            bgLayer.backgroundColor = Glass.hoverFill.cgColor
-        } else {
-            bgLayer.backgroundColor = NSColor.clear.cgColor
-        }
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshState()
+    }
 
-        strokeLayer.strokeColor = (isSelected && selectionGlows)
-            ? accentColor.withAlphaComponent(0.85).cgColor
-            : NSColor.clear.cgColor
-        contentTintColor = (isSelected || isDestructive)
-            ? .white
-            : NSColor.white.withAlphaComponent(isHovered ? 1.0 : 0.85)
-        CATransaction.commit()
+    private func refreshState() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(Glass.animDuration)
+            if isDestructive {
+                // 危险按钮：常态保持低调，hover/press 才出红色高亮。
+                let alpha: CGFloat = isPressed ? 0.44 : (isHovered ? 0.30 : 0.10)
+                bgLayer.backgroundColor = accentColor.withAlphaComponent(alpha).cgColor
+            } else if isPressed {
+                bgLayer.backgroundColor = isSelected
+                    ? accentColor.withAlphaComponent(0.30).cgColor
+                    : Glass.pressedFill.cgColor
+            } else if isSelected {
+                bgLayer.backgroundColor = accentColor.withAlphaComponent(0.22).cgColor
+            } else if isHovered {
+                bgLayer.backgroundColor = Glass.hoverFill.cgColor
+            } else {
+                bgLayer.backgroundColor = NSColor.clear.cgColor
+            }
+
+            strokeLayer.strokeColor = (isSelected && selectionGlows)
+                ? accentColor.withAlphaComponent(0.82).cgColor
+                : NSColor.clear.cgColor
+            contentTintColor = (isSelected || isDestructive)
+                ? .white
+                : NSColor.white.withAlphaComponent(isHovered ? 1.0 : 0.86)
+            CATransaction.commit()
+        }
     }
 }
 

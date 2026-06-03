@@ -39,20 +39,18 @@ final class WelcomeWindowController: NSWindowController {
     private func setupContent(size: NSSize) {
         guard let contentView = window?.contentView else { return }
 
-        // 全屏液态玻璃底（米白 tint + 顶光 + 底暖光，自动跟随系统明暗）
+        // 全屏液态玻璃底（暖纸 tint + 顶光 + 底暖光，自动跟随系统明暗）
         ClaudeGlass.install(into: contentView)
 
         // 顶部 Logo + 标题
         let logoSize: CGFloat = 84
         let logoY = size.height - 152
-        let logo = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.accent.cgColor
-            v.layer?.borderColor = NSColor.white.withAlphaComponent(0.40).cgColor
-        }
+        let logo = AppearanceAwareGradientView(cornerRadius: 22)
         logo.frame = NSRect(x: (size.width - logoSize) / 2, y: logoY, width: logoSize, height: logoSize)
-        logo.wantsLayer = true
-        logo.layer?.cornerRadius = 22
-        logo.layer?.borderWidth = 1
+        logo.layer?.shadowColor = NSColor.black.withAlphaComponent(0.18).cgColor
+        logo.layer?.shadowOpacity = 1
+        logo.layer?.shadowRadius = 16
+        logo.layer?.shadowOffset = CGSize(width: 0, height: -4)
         contentView.addSubview(logo)
 
         let icon = NSImageView(frame: NSRect(x: 0, y: 0, width: logoSize, height: logoSize))
@@ -97,12 +95,13 @@ final class WelcomeWindowController: NSWindowController {
             let y = gridY + CGFloat(1 - row) * (cellH + 12)
             addFeatureCell(in: contentView,
                            frame: NSRect(x: x, y: y, width: cellW, height: cellH),
-                           symbol: item.0, title: item.1, desc: item.2)
+                           symbol: item.0, title: item.1, desc: item.2,
+                           usesSecondaryAccent: i % 2 == 1)
         }
 
         // 权限提示
         let permBox = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
+            v.layer?.backgroundColor = ClaudeTheme.controlFill.cgColor
             v.layer?.borderColor = ClaudeTheme.stroke.cgColor
         }
         permBox.frame = NSRect(x: 60, y: 78, width: size.width - 120, height: 48)
@@ -137,18 +136,29 @@ final class WelcomeWindowController: NSWindowController {
         self.startButton = btn
     }
 
-    private func addFeatureCell(in container: NSView, frame: NSRect, symbol: String, title: String, desc: String) {
+    private func addFeatureCell(in container: NSView,
+                                frame: NSRect,
+                                symbol: String,
+                                title: String,
+                                desc: String,
+                                usesSecondaryAccent: Bool)
+    {
         let cell = AppearanceAwareView { v in
             v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
             v.layer?.borderColor = ClaudeTheme.stroke.cgColor
+            v.layer?.shadowColor = ClaudeTheme.accentShadow.cgColor
         }
         cell.frame = frame
         cell.wantsLayer = true
-        cell.layer?.cornerRadius = 14
+        cell.layer?.cornerRadius = 12
+        cell.layer?.cornerCurve = .continuous
         cell.layer?.borderWidth = 1
+        cell.layer?.shadowOpacity = 1
+        cell.layer?.shadowRadius = 8
+        cell.layer?.shadowOffset = CGSize(width: 0, height: -2)
 
         let iconBg = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.16).cgColor
+            v.layer?.backgroundColor = (usesSecondaryAccent ? ClaudeTheme.secondarySoft : ClaudeTheme.accentSoft).cgColor
         }
         iconBg.frame = NSRect(x: 12, y: (frame.height - 32) / 2, width: 32, height: 32)
         iconBg.wantsLayer = true
@@ -158,7 +168,7 @@ final class WelcomeWindowController: NSWindowController {
         let icon = NSImageView(frame: NSRect(x: 0, y: 0, width: 32, height: 32))
         if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
             icon.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-            icon.contentTintColor = ClaudeTheme.accent
+            icon.contentTintColor = usesSecondaryAccent ? ClaudeTheme.secondaryAccent : ClaudeTheme.accent
         }
         iconBg.addSubview(icon)
 
@@ -268,8 +278,8 @@ final class WelcomeAccentButton: NSButton {
                                                 .foregroundColor: NSColor.white
                                              ])
 
-        bgLayer.startPoint = CGPoint(x: 0.5, y: 1.0)
-        bgLayer.endPoint = CGPoint(x: 0.5, y: 0.0)
+        bgLayer.startPoint = CGPoint(x: 0.05, y: 0.95)
+        bgLayer.endPoint = CGPoint(x: 0.95, y: 0.05)
         strokeLayer.fillColor = .clear
         strokeLayer.lineWidth = 1
 
@@ -310,18 +320,18 @@ final class WelcomeAccentButton: NSButton {
     }
 
     private func refresh() {
-        let topAlpha: CGFloat = isPressed ? 0.85 : (isHovered ? 1.0 : 0.95)
-        let botAlpha: CGFloat = isPressed ? 0.65 : (isHovered ? 0.85 : 0.78)
+        let primaryAlpha: CGFloat = isPressed ? 0.86 : (isHovered ? 1.0 : 0.96)
+        let secondaryAlpha: CGFloat = isPressed ? 0.54 : (isHovered ? 0.78 : 0.62)
 
         effectiveAppearance.performAsCurrentDrawingAppearance {
             let accent = isPressed ? ClaudeTheme.accentPressed : ClaudeTheme.accent
             CATransaction.begin()
             CATransaction.setAnimationDuration(Glass.animDuration)
             bgLayer.colors = [
-                accent.withAlphaComponent(topAlpha).cgColor,
-                accent.withAlphaComponent(botAlpha).cgColor
+                accent.withAlphaComponent(primaryAlpha).cgColor,
+                ClaudeTheme.secondaryAccent.withAlphaComponent(secondaryAlpha).cgColor
             ]
-            strokeLayer.strokeColor = NSColor.white.withAlphaComponent(0.45).cgColor
+            strokeLayer.strokeColor = NSColor.white.withAlphaComponent(isHovered ? 0.52 : 0.40).cgColor
             CATransaction.commit()
         }
     }

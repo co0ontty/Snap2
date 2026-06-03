@@ -35,6 +35,10 @@ final class GlassPanel: NSPanel {
         let host = NSView(frame: NSRect(origin: .zero, size: size))
         host.wantsLayer = true
         host.layer?.masksToBounds = false
+        host.layer?.shadowColor = Glass.shadowColor.cgColor
+        host.layer?.shadowOpacity = 1
+        host.layer?.shadowRadius = Glass.shadowRadius
+        host.layer?.shadowOffset = Glass.shadowOffset
         contentView = host
 
         glass.cornerRadius = cornerRadius

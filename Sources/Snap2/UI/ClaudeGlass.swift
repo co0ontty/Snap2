@@ -1,20 +1,21 @@
 import AppKit
 import QuartzCore
 
-/// Claude 风格液态玻璃栈。设置窗 / 欢迎窗复用。
+/// Snap 风格液态玻璃栈。设置窗 / 欢迎窗复用。
 ///
 /// 渲染层栈（从下到上）：
 /// 1. NSVisualEffectView (`.windowBackground` + `.behindWindow`) —— 模糊壁纸
-/// 2. cream tint layer —— 米白/暖棕染色（让玻璃成纸质感）
+/// 2. surface tint layer —— 暖纸/炭黑染色（让玻璃成纸质感）
 /// 3. top highlight gradient —— 顶部白色高光
-/// 4. bottom glow gradient —— 底部 Claude 橙暖光
+/// 4. bottom glow gradient —— 底部珊瑚暖光
+/// 5. side refraction gradient —— 右上角极轻冷色折光
 ///
 /// 用法：`ClaudeGlass.install(into: contentView)` —— 自动把 4 层铺到 host 全尺寸，
 /// 后续把 UI 直接 add 到 contentView 即可。
 ///
 /// 注意：CALayer 持有的 cgColor 是快照，不会随系统明暗切换刷新。本工具内部用
 /// `ClaudeGlassHostView` 监听 `viewDidChangeEffectiveAppearance`，自己把
-/// tint/top/bottom 三层 cgColor 重读一遍。
+/// tint/top/bottom/refraction 几层 cgColor 重读一遍。
 enum ClaudeGlass {
 
     /// 安装到 host 全尺寸。host 必须有非零 frame 或 autoresizing 约束。
@@ -32,27 +33,28 @@ enum ClaudeGlass {
     }
 }
 
-/// 承载 4 层玻璃的 NSView。监听 effectiveAppearance 切换。
+/// 承载玻璃层的 NSView。监听 effectiveAppearance 切换。
 final class ClaudeGlassHostView: NSView {
 
     private let blur = NSVisualEffectView()
     private let tintLayer = CALayer()
     private let topHighlight = CAGradientLayer()
     private let bottomGlow = CAGradientLayer()
+    private let sideRefraction = CAGradientLayer()
 
     override init(frame frameRect: NSRect) {
         super.init(frame: frameRect)
         wantsLayer = true
 
         // 1) 模糊层
-        blur.material = .windowBackground   // 浅色透出米白、深色透出暗灰；上面再叠 cream tint 补暖
+        blur.material = .windowBackground   // 浅色透出暖纸面、深色透出暗灰；上面再叠 surface tint 补色
         blur.blendingMode = .behindWindow
         blur.state = .active
         blur.autoresizingMask = [.width, .height]
         blur.frame = bounds
         addSubview(blur)
 
-        // 2) cream tint
+        // 2) surface tint
         tintLayer.frame = bounds
         layer?.addSublayer(tintLayer)
 
@@ -70,6 +72,13 @@ final class ClaudeGlassHostView: NSView {
         bottomGlow.locations = [0.0, 1.0]
         layer?.addSublayer(bottomGlow)
 
+        // 5) 右上角冷色折光
+        sideRefraction.frame = bounds
+        sideRefraction.startPoint = CGPoint(x: 1.0, y: 1.0)
+        sideRefraction.endPoint = CGPoint(x: 0.25, y: 0.35)
+        sideRefraction.locations = [0.0, 1.0]
+        layer?.addSublayer(sideRefraction)
+
         refreshColors()
     }
 
@@ -83,6 +92,7 @@ final class ClaudeGlassHostView: NSView {
         tintLayer.frame = bounds
         topHighlight.frame = bounds
         bottomGlow.frame = bounds
+        sideRefraction.frame = bounds
         CATransaction.commit()
     }
 
@@ -106,6 +116,10 @@ final class ClaudeGlassHostView: NSView {
             ]
             bottomGlow.colors = [
                 ClaudeTheme.bottomGlow.cgColor,
+                NSColor.clear.cgColor,
+            ]
+            sideRefraction.colors = [
+                ClaudeTheme.sideGlow.cgColor,
                 NSColor.clear.cgColor,
             ]
             CATransaction.commit()
@@ -144,6 +158,74 @@ final class AppearanceAwareView: NSView {
     }
 }
 
+/// 跟随明暗切换的渐变徽章容器，用于 App 图标、侧边栏品牌等小面积强调元素。
+final class AppearanceAwareGradientView: NSView {
+    private let gradientLayer = CAGradientLayer()
+    private let strokeLayer = CAShapeLayer()
+    private let colors: () -> [NSColor]
+    private let stroke: () -> NSColor
+
+    var cornerRadius: CGFloat {
+        didSet { needsLayout = true }
+    }
+
+    init(cornerRadius: CGFloat,
+         colors: @escaping () -> [NSColor] = { [ClaudeTheme.accent, ClaudeTheme.secondaryAccent] },
+         stroke: @escaping () -> NSColor = { NSColor.white.withAlphaComponent(0.40) })
+    {
+        self.cornerRadius = cornerRadius
+        self.colors = colors
+        self.stroke = stroke
+        super.init(frame: .zero)
+        wantsLayer = true
+        layer?.masksToBounds = false
+
+        gradientLayer.startPoint = CGPoint(x: 0.08, y: 0.92)
+        gradientLayer.endPoint = CGPoint(x: 0.95, y: 0.05)
+        layer?.addSublayer(gradientLayer)
+
+        strokeLayer.fillColor = .clear
+        strokeLayer.lineWidth = 1
+        layer?.addSublayer(strokeLayer)
+
+        refresh()
+    }
+
+    @available(*, unavailable)
+    required init?(coder: NSCoder) { fatalError() }
+
+    override func layout() {
+        super.layout()
+        CATransaction.begin()
+        CATransaction.setDisableActions(true)
+        gradientLayer.frame = bounds
+        gradientLayer.cornerRadius = cornerRadius
+        gradientLayer.cornerCurve = .continuous
+        strokeLayer.frame = bounds
+        let rect = bounds.insetBy(dx: 0.5, dy: 0.5)
+        strokeLayer.path = CGPath(roundedRect: rect,
+                                  cornerWidth: max(0, cornerRadius - 0.5),
+                                  cornerHeight: max(0, cornerRadius - 0.5),
+                                  transform: nil)
+        CATransaction.commit()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+
+    private func refresh() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            CATransaction.begin()
+            CATransaction.setDisableActions(true)
+            gradientLayer.colors = colors().map { $0.cgColor }
+            strokeLayer.strokeColor = stroke().cgColor
+            CATransaction.commit()
+        }
+    }
+}
+
 /// 1px 分隔线，颜色用 `ClaudeTheme.hairline` 并跟随明暗。
 final class AppearanceAwareDivider: NSView {
     override init(frame frameRect: NSRect) {
@@ -166,4 +248,3 @@ final class AppearanceAwareDivider: NSView {
         }
     }
 }
-

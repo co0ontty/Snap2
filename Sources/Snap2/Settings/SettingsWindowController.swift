@@ -63,7 +63,7 @@ final class SettingsWindowController: NSWindowController {
         window.isReleasedWhenClosed = false
         window.backgroundColor = .clear
         window.center()
-        // 跟随系统明暗：浅色给米白纸面、深色给暖深棕
+        // 跟随系统明暗：浅色给暖纸面、深色给冷中性炭黑
         window.appearance = nil
 
         super.init(window: window)
@@ -85,7 +85,7 @@ final class SettingsWindowController: NSWindowController {
     private func buildLayout(size: NSSize) {
         guard let contentView = window?.contentView else { return }
 
-        // 全窗口液态玻璃底（米白 tint + 顶光 + 底暖光，自动跟随系统明暗）
+        // 全窗口液态玻璃底（暖纸 tint + 顶光 + 底暖光，自动跟随系统明暗）
         ClaudeGlass.install(into: contentView)
 
         // —— 侧边栏（液态玻璃）——
@@ -96,6 +96,12 @@ final class SettingsWindowController: NSWindowController {
         sidebar.state = .active
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(sidebar)
+
+        let sidebarTint = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.sidebarTint.withAlphaComponent(0.46).cgColor
+        }
+        sidebarTint.translatesAutoresizingMaskIntoConstraints = false
+        sidebar.addSubview(sidebarTint, positioned: .below, relativeTo: nil)
 
         // 侧边栏右侧 1px 分隔线
         let divider = AppearanceAwareDivider()
@@ -109,13 +115,7 @@ final class SettingsWindowController: NSWindowController {
         brand.alignment = .centerY
         brand.translatesAutoresizingMaskIntoConstraints = false
 
-        let brandIconBg = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.92).cgColor
-            v.layer?.borderColor = NSColor.white.withAlphaComponent(0.45).cgColor
-        }
-        brandIconBg.wantsLayer = true
-        brandIconBg.layer?.cornerRadius = 8
-        brandIconBg.layer?.borderWidth = 1
+        let brandIconBg = AppearanceAwareGradientView(cornerRadius: 8)
         brandIconBg.translatesAutoresizingMaskIntoConstraints = false
         brandIconBg.widthAnchor.constraint(equalToConstant: 30).isActive = true
         brandIconBg.heightAnchor.constraint(equalToConstant: 30).isActive = true
@@ -198,6 +198,11 @@ final class SettingsWindowController: NSWindowController {
 
         // —— 约束 ——
         NSLayoutConstraint.activate([
+            sidebarTint.topAnchor.constraint(equalTo: sidebar.topAnchor),
+            sidebarTint.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
+            sidebarTint.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
+            sidebarTint.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
+
             sidebar.topAnchor.constraint(equalTo: contentView.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             sidebar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
@@ -316,6 +321,7 @@ final class SidebarItemView: NSView {
 
     private let bgLayer = CALayer()
     private let strokeLayer = CAShapeLayer()
+    private let iconBg = NSView()
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
     private let subtitleLabel = NSTextField(labelWithString: "")
@@ -359,11 +365,9 @@ final class SidebarItemView: NSView {
         subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(subtitleLabel)
 
-        let iconBg = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
-        }
         iconBg.wantsLayer = true
         iconBg.layer?.cornerRadius = 7
+        iconBg.layer?.cornerCurve = .continuous
         iconBg.translatesAutoresizingMaskIntoConstraints = false
         addSubview(iconBg, positioned: .below, relativeTo: iconView)
 
@@ -432,20 +436,23 @@ final class SidebarItemView: NSView {
             CATransaction.setAnimationDuration(Glass.animDuration)
 
             if isSelected {
-                bgLayer.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.18).cgColor
-                strokeLayer.strokeColor = ClaudeTheme.accent.withAlphaComponent(0.55).cgColor
+                bgLayer.backgroundColor = ClaudeTheme.selectionFill.cgColor
+                strokeLayer.strokeColor = ClaudeTheme.focusRing.cgColor
+                iconBg.layer?.backgroundColor = ClaudeTheme.accent.cgColor
                 titleLabel.textColor = ClaudeTheme.ink
                 subtitleLabel.textColor = ClaudeTheme.inkSecondary
-                iconView.contentTintColor = ClaudeTheme.accent
+                iconView.contentTintColor = .white
             } else if isHovered {
-                bgLayer.backgroundColor = ClaudeTheme.creamCardHover.cgColor
+                bgLayer.backgroundColor = ClaudeTheme.controlHover.cgColor
                 strokeLayer.strokeColor = ClaudeTheme.stroke.cgColor
+                iconBg.layer?.backgroundColor = ClaudeTheme.secondarySoft.cgColor
                 titleLabel.textColor = ClaudeTheme.ink
                 subtitleLabel.textColor = ClaudeTheme.inkSecondary
-                iconView.contentTintColor = ClaudeTheme.ink
+                iconView.contentTintColor = ClaudeTheme.secondaryAccent
             } else {
                 bgLayer.backgroundColor = NSColor.clear.cgColor
                 strokeLayer.strokeColor = NSColor.clear.cgColor
+                iconBg.layer?.backgroundColor = ClaudeTheme.controlFill.cgColor
                 titleLabel.textColor = ClaudeTheme.ink
                 subtitleLabel.textColor = ClaudeTheme.inkTertiary
                 iconView.contentTintColor = ClaudeTheme.inkSecondary
@@ -525,7 +532,8 @@ final class UpgradePillButton: NSView {
 
     var onClick: (() -> Void)?
 
-    private let bgLayer = CALayer()
+    private let bgLayer = CAGradientLayer()
+    private let strokeLayer = CAShapeLayer()
     private let iconView = NSImageView()
     private let label = NSTextField(labelWithString: "升级")
     private var trackingArea: NSTrackingArea?
@@ -538,7 +546,13 @@ final class UpgradePillButton: NSView {
 
         bgLayer.cornerRadius = 9
         bgLayer.cornerCurve = .continuous
+        bgLayer.startPoint = CGPoint(x: 0.05, y: 0.95)
+        bgLayer.endPoint = CGPoint(x: 0.95, y: 0.05)
         layer?.addSublayer(bgLayer)
+
+        strokeLayer.fillColor = .clear
+        strokeLayer.lineWidth = 1
+        layer?.addSublayer(strokeLayer)
 
         let cfg = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
         iconView.image = NSImage(systemSymbolName: "arrow.up.circle.fill",
@@ -594,6 +608,9 @@ final class UpgradePillButton: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         bgLayer.frame = bounds
+        strokeLayer.frame = bounds
+        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
+        strokeLayer.path = CGPath(roundedRect: r, cornerWidth: r.height / 2, cornerHeight: r.height / 2, transform: nil)
         CATransaction.commit()
     }
 
@@ -618,7 +635,12 @@ final class UpgradePillButton: NSView {
 
     private func refresh() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            bgLayer.backgroundColor = (isHovered ? ClaudeTheme.accentPressed : ClaudeTheme.accent).cgColor
+            let primary = isHovered ? ClaudeTheme.accentPressed : ClaudeTheme.accent
+            bgLayer.colors = [
+                primary.cgColor,
+                ClaudeTheme.secondaryAccent.withAlphaComponent(isHovered ? 0.88 : 0.72).cgColor,
+            ]
+            strokeLayer.strokeColor = NSColor.white.withAlphaComponent(isHovered ? 0.46 : 0.32).cgColor
         }
     }
 }

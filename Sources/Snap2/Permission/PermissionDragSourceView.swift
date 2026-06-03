@@ -75,10 +75,9 @@ final class PermissionDragSourceView: NSView, NSPasteboardItemDataProvider, NSDr
         wantsLayer = true
 
         rowView.wantsLayer = true
-        rowView.layer?.cornerRadius = 7
+        rowView.layer?.cornerRadius = 9
+        rowView.layer?.cornerCurve = .continuous
         rowView.layer?.borderWidth = 1
-        rowView.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.06).cgColor
-        rowView.layer?.borderColor = NSColor.white.withAlphaComponent(0.10).cgColor
         rowView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(rowView)
 
@@ -86,6 +85,7 @@ final class PermissionDragSourceView: NSView, NSPasteboardItemDataProvider, NSDr
         iconChrome.wantsLayer = true
         iconChrome.layer?.backgroundColor = NSColor.white.withAlphaComponent(0.92).cgColor
         iconChrome.layer?.cornerRadius = 6
+        iconChrome.layer?.cornerCurve = .continuous
         iconChrome.translatesAutoresizingMaskIntoConstraints = false
         rowView.addSubview(iconChrome)
 
@@ -96,7 +96,6 @@ final class PermissionDragSourceView: NSView, NSPasteboardItemDataProvider, NSDr
 
         label.stringValue = hostApp.displayName
         label.font = .systemFont(ofSize: 15, weight: .semibold)
-        label.textColor = NSColor.white.withAlphaComponent(0.92)
         label.translatesAutoresizingMaskIntoConstraints = false
         rowView.addSubview(label)
 
@@ -120,6 +119,21 @@ final class PermissionDragSourceView: NSView, NSPasteboardItemDataProvider, NSDr
             label.trailingAnchor.constraint(lessThanOrEqualTo: rowView.trailingAnchor, constant: -12),
             label.centerYAnchor.constraint(equalTo: rowView.centerYAnchor),
         ])
+
+        refreshAppearance()
+    }
+
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refreshAppearance()
+    }
+
+    private func refreshAppearance() {
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            rowView.layer?.backgroundColor = ClaudeTheme.controlFill.cgColor
+            rowView.layer?.borderColor = ClaudeTheme.stroke.cgColor
+            label.textColor = ClaudeTheme.ink
+        }
     }
 
     /// 拖拽时跟手的飞影——直接把行渲染成图片。

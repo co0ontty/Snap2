@@ -220,10 +220,12 @@ private final class OverlayContentView: NSView {
 
     private func build(hostApp: PermissionHostApp, panel: PermissionPanel) {
         // 左侧 ← 返回按钮 ——————————————————————————
-        let backChrome = NSView()
+        let backChrome = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.secondaryAccent.withAlphaComponent(0.16).cgColor
+            v.layer?.borderColor = NSColor.white.withAlphaComponent(0.16).cgColor
+        }
         backChrome.translatesAutoresizingMaskIntoConstraints = false
-        backChrome.wantsLayer = true
-        backChrome.layer?.backgroundColor = Glass.hoverFill.cgColor
+        backChrome.layer?.borderWidth = 1
         backChrome.layer?.cornerRadius = Glass.radiusButton
         addSubview(backChrome)
 
@@ -232,7 +234,7 @@ private final class OverlayContentView: NSView {
         backButton.isBordered = false
         backButton.image = NSImage(systemSymbolName: "chevron.left",
                                    accessibilityDescription: "返回")
-        backButton.contentTintColor = NSColor.white.withAlphaComponent(0.78)
+        backButton.contentTintColor = NSColor.white.withAlphaComponent(0.86)
         backButton.target = self
         backButton.action = #selector(backPressed)
         if let cell = backButton.cell as? NSButtonCell {
@@ -240,12 +242,12 @@ private final class OverlayContentView: NSView {
         }
         backChrome.addSubview(backButton)
 
-        // ↑ 蓝色箭头 ——————————————————————————
+        // ↑ 向上箭头 ——————————————————————————
         let arrowView = NSImageView()
         arrowView.translatesAutoresizingMaskIntoConstraints = false
         arrowView.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: nil)
         arrowView.symbolConfiguration = .init(pointSize: 26, weight: .bold)
-        arrowView.contentTintColor = ClaudeTheme.accent
+        arrowView.contentTintColor = ClaudeTheme.secondaryAccent
 
         addSubview(arrowView)
 
@@ -295,7 +297,7 @@ private final class OverlayContentView: NSView {
     {
         let text = "拖拽 \(hostApp.displayName) 到上方列表以授予\(panel.title)权限"
         return NSAttributedString(string: text, attributes: [
-            .font: NSFont.systemFont(ofSize: 14, weight: .medium),
+            .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
             .foregroundColor: NSColor.white.withAlphaComponent(0.92),
         ])
     }

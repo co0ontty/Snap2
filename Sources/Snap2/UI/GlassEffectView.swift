@@ -6,16 +6,18 @@ import QuartzCore
 /// 渲染层栈（从下到上）：
 /// 1. NSVisualEffectView (.hudWindow / behindWindow) ── 模糊背景
 /// 2. tintLayer ── 极轻的暗色调，确保白色高光可见
-/// 3. highlightLayer ── 顶部到 50% 处的白色渐变高光（玻璃反光）
-/// 4. bottomGlowLayer ── 底部边缘的反光线
-/// 5. innerStrokeLayer ── 1px 内描边（玻璃边缘）
-/// 6. contentView ── 子视图载入区
+/// 3. accentWashLayer ── 很轻的暖色/冷色斜向折光
+/// 4. highlightLayer ── 顶部到 50% 处的白色渐变高光（玻璃反光）
+/// 5. bottomGlowLayer ── 底部边缘的反光线
+/// 6. innerStrokeLayer ── 1px 内描边（玻璃边缘）
+/// 7. contentView ── 子视图载入区
 final class GlassEffectView: NSView {
 
     let contentView = NSView()
 
     private let blurView = NSVisualEffectView()
     private let tintLayer = CALayer()
+    private let accentWashLayer = CAGradientLayer()
     private let highlightLayer = CAGradientLayer()
     private let bottomGlowLayer = CAGradientLayer()
     private let innerStrokeLayer = CAShapeLayer()
@@ -51,6 +53,7 @@ final class GlassEffectView: NSView {
         // 加载层级
         if let layer = layer {
             layer.addSublayer(tintLayer)
+            layer.addSublayer(accentWashLayer)
             layer.addSublayer(highlightLayer)
             layer.addSublayer(bottomGlowLayer)
             layer.addSublayer(innerStrokeLayer)
@@ -83,10 +86,15 @@ final class GlassEffectView: NSView {
         highlightLayer.endPoint = CGPoint(x: 0.5, y: 0.45)
         highlightLayer.locations = [0.0, 1.0]
 
+        // 轻微斜向折光，让 HUD 不只是半透明黑块。
+        accentWashLayer.startPoint = CGPoint(x: 0.0, y: 1.0)
+        accentWashLayer.endPoint = CGPoint(x: 1.0, y: 0.0)
+        accentWashLayer.locations = [0.0, 0.58, 1.0]
+
         // 底部 1px 反光线
         bottomGlowLayer.colors = [
             NSColor.white.withAlphaComponent(0.0).cgColor,
-            NSColor.white.withAlphaComponent(0.10).cgColor,
+            NSColor.white.withAlphaComponent(0.14).cgColor,
         ]
         bottomGlowLayer.startPoint = CGPoint(x: 0.5, y: 1.0)
         bottomGlowLayer.endPoint = CGPoint(x: 0.5, y: 0.0)
@@ -103,6 +111,11 @@ final class GlassEffectView: NSView {
         layoutLayers()
     }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        layoutLayers()
+    }
+
     private func layoutLayers() {
         guard layer != nil else { return }
         layer?.cornerRadius = cornerRadius
@@ -113,11 +126,17 @@ final class GlassEffectView: NSView {
 
         tintLayer.frame = r
         if let tint = tintColor {
-            tintLayer.backgroundColor = tint.withAlphaComponent(0.18).cgColor
+            tintLayer.backgroundColor = tint.withAlphaComponent(0.20).cgColor
         } else {
-            tintLayer.backgroundColor = NSColor.black.withAlphaComponent(0.10).cgColor
+            tintLayer.backgroundColor = NSColor.black.withAlphaComponent(0.16).cgColor
         }
 
+        accentWashLayer.frame = r
+        accentWashLayer.colors = [
+            ClaudeTheme.accent.withAlphaComponent(0.08).cgColor,
+            NSColor.clear.cgColor,
+            ClaudeTheme.secondaryAccent.withAlphaComponent(0.07).cgColor,
+        ]
         highlightLayer.frame = r
         bottomGlowLayer.frame = r
 

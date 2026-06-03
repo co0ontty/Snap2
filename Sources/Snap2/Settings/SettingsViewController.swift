@@ -51,7 +51,7 @@ final class SettingsViewController: NSViewController {
         // 标题
         let (header, subtitle) = headerStrings()
         let titleLabel = NSTextField(labelWithString: header)
-        titleLabel.font = NSFont.systemFont(ofSize: 22, weight: .semibold)
+        titleLabel.font = NSFont.systemFont(ofSize: 24, weight: .semibold)
         titleLabel.textColor = ClaudeTheme.ink
         titleLabel.backgroundColor = .clear
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
@@ -79,9 +79,9 @@ final class SettingsViewController: NSViewController {
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
             subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
 
-            content.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 24),
-            content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 28),
-            content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -28),
+            content.topAnchor.constraint(equalTo: subtitleLabel.bottomAnchor, constant: 22),
+            content.leadingAnchor.constraint(equalTo: container.leadingAnchor, constant: 30),
+            content.trailingAnchor.constraint(equalTo: container.trailingAnchor, constant: -30),
             content.bottomAnchor.constraint(equalTo: container.bottomAnchor, constant: -24),
         ])
 
@@ -106,16 +106,16 @@ final class SettingsViewController: NSViewController {
         let card = AppearanceAwareView { v in
             v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
             v.layer?.borderColor = ClaudeTheme.stroke.cgColor
-            v.layer?.shadowColor = ClaudeTheme.accent.withAlphaComponent(0.18).cgColor
+            v.layer?.shadowColor = ClaudeTheme.accentShadow.cgColor
         }
         card.wantsLayer = true
-        card.layer?.cornerRadius = 14
+        card.layer?.cornerRadius = 12
         card.layer?.cornerCurve = .continuous
         card.layer?.borderWidth = 1
         // 轻量阴影让卡片浮在玻璃之上
         card.layer?.shadowOpacity = 1.0
-        card.layer?.shadowRadius = 8
-        card.layer?.shadowOffset = CGSize(width: 0, height: -2)
+        card.layer?.shadowRadius = 10
+        card.layer?.shadowOffset = CGSize(width: 0, height: -3)
         card.translatesAutoresizingMaskIntoConstraints = false
         parent.addSubview(card)
         if let h = height {
@@ -145,7 +145,7 @@ final class SettingsViewController: NSViewController {
             control.trailingAnchor.constraint(equalTo: row.trailingAnchor, constant: -16),
             control.centerYAnchor.constraint(equalTo: row.centerYAnchor),
         ])
-        row.heightAnchor.constraint(equalToConstant: 48).isActive = true
+        row.heightAnchor.constraint(equalToConstant: 50).isActive = true
         return row
     }
 
@@ -452,13 +452,7 @@ final class SettingsViewController: NSViewController {
         let card = makeCard(in: parent)
 
         // Logo
-        let logoBg = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.accent.cgColor
-            v.layer?.borderColor = NSColor.white.withAlphaComponent(0.40).cgColor
-        }
-        logoBg.wantsLayer = true
-        logoBg.layer?.cornerRadius = 18
-        logoBg.layer?.borderWidth = 1
+        let logoBg = AppearanceAwareGradientView(cornerRadius: 18)
         logoBg.translatesAutoresizingMaskIntoConstraints = false
 
         let logoIcon = NSImageView()
@@ -743,7 +737,7 @@ final class HotkeyRecorderView: NSView {
     private func applyIdleStyle() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             layer?.borderColor = ClaudeTheme.stroke.cgColor
-            layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
+            layer?.backgroundColor = ClaudeTheme.controlFill.cgColor
             displayLabel.textColor = ClaudeTheme.ink
         }
     }
@@ -757,8 +751,8 @@ final class HotkeyRecorderView: NSView {
         displayLabel.stringValue = "请按下快捷键…"
         effectiveAppearance.performAsCurrentDrawingAppearance {
             displayLabel.textColor = ClaudeTheme.accent
-            layer?.borderColor = ClaudeTheme.accent.cgColor
-            layer?.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.12).cgColor
+            layer?.borderColor = ClaudeTheme.focusRing.cgColor
+            layer?.backgroundColor = ClaudeTheme.selectionFill.cgColor
         }
         layer?.borderWidth = 2
 

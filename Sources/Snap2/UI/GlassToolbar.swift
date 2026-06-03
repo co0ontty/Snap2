@@ -298,6 +298,11 @@ final class WidthDot: NSButton {
     override func mouseEntered(with event: NSEvent) { isHovered = true; refresh() }
     override func mouseExited(with event: NSEvent)  { isHovered = false; refresh() }
 
+    override func viewDidChangeEffectiveAppearance() {
+        super.viewDidChangeEffectiveAppearance()
+        refresh()
+    }
+
     override func layout() {
         super.layout()
         let bg = bounds.insetBy(dx: 2, dy: 2)
@@ -314,12 +319,14 @@ final class WidthDot: NSButton {
     }
 
     private func refresh() {
-        CATransaction.begin()
-        CATransaction.setAnimationDuration(Glass.animDuration)
-        bgLayer.backgroundColor = isSelected ? Glass.selectedFill.cgColor
-            : (isHovered ? Glass.hoverFill.cgColor : NSColor.clear.cgColor)
-        dotLayer.backgroundColor = NSColor.white.withAlphaComponent(isSelected ? 1.0 : 0.85).cgColor
-        CATransaction.commit()
+        effectiveAppearance.performAsCurrentDrawingAppearance {
+            CATransaction.begin()
+            CATransaction.setAnimationDuration(Glass.animDuration)
+            bgLayer.backgroundColor = isSelected ? ClaudeTheme.accent.withAlphaComponent(0.22).cgColor
+                : (isHovered ? Glass.hoverFill.cgColor : NSColor.clear.cgColor)
+            dotLayer.backgroundColor = NSColor.white.withAlphaComponent(isSelected ? 1.0 : 0.85).cgColor
+            CATransaction.commit()
+        }
     }
 }
 
