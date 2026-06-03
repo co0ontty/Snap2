@@ -14,6 +14,7 @@ final class SettingsWindowController: NSWindowController {
     private var sidebarStack: NSStackView!
     private var sidebarItems: [SidebarItemView] = []
     private var detailContainer: NSView!
+    private var currentDetailView: NSView?
 
     // 侧边栏底部 — 可点击版本号 + 升级胶囊
     private var versionButton: VersionLinkButton!
@@ -49,7 +50,7 @@ final class SettingsWindowController: NSWindowController {
     private var currentTab: Tab = .general
 
     private init() {
-        let size = NSSize(width: 780, height: 500)
+        let size = NSSize(width: 860, height: 560)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
@@ -89,7 +90,7 @@ final class SettingsWindowController: NSWindowController {
         ClaudeGlass.install(into: contentView)
 
         // —— 侧边栏（液态玻璃）——
-        let sidebarWidth: CGFloat = 220
+        let sidebarWidth: CGFloat = 236
         let sidebar = NSVisualEffectView()
         sidebar.material = .sidebar
         sidebar.blendingMode = .behindWindow
@@ -157,7 +158,7 @@ final class SettingsWindowController: NSWindowController {
         // 菜单
         sidebarStack = NSStackView()
         sidebarStack.orientation = .vertical
-        sidebarStack.spacing = 4
+        sidebarStack.spacing = 8
         sidebarStack.alignment = .leading
         sidebarStack.translatesAutoresizingMaskIntoConstraints = false
         sidebar.addSubview(sidebarStack)
@@ -170,7 +171,7 @@ final class SettingsWindowController: NSWindowController {
             )
             item.onClick = { [weak self] in self?.select(tab: tab) }
             item.translatesAutoresizingMaskIntoConstraints = false
-            item.heightAnchor.constraint(equalToConstant: 44).isActive = true
+            item.heightAnchor.constraint(equalToConstant: 52).isActive = true
             item.widthAnchor.constraint(equalToConstant: sidebarWidth - 24).isActive = true
             sidebarStack.addArrangedSubview(item)
             sidebarItems.append(item)
@@ -214,10 +215,10 @@ final class SettingsWindowController: NSWindowController {
             divider.widthAnchor.constraint(equalToConstant: 1),
 
             // 给标题让出 titlebar 高度
-            brand.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 38),
-            brand.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 18),
+            brand.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 42),
+            brand.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 20),
 
-            sidebarStack.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 22),
+            sidebarStack.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 26),
             sidebarStack.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 12),
             sidebarStack.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -12),
 
@@ -226,10 +227,32 @@ final class SettingsWindowController: NSWindowController {
             footer.leadingAnchor.constraint(greaterThanOrEqualTo: sidebar.leadingAnchor, constant: 12),
             footer.trailingAnchor.constraint(lessThanOrEqualTo: sidebar.trailingAnchor, constant: -12),
 
-            detailContainer.topAnchor.constraint(equalTo: contentView.topAnchor),
-            detailContainer.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
-            detailContainer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor),
-            detailContainer.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+            detailContainer.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
+            detailContainer.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 14),
+            detailContainer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
+            detailContainer.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14),
+        ])
+
+        let detailPanel = AppearanceAwareView { v in
+            v.layer?.backgroundColor = ClaudeTheme.cream.withAlphaComponent(0.52).cgColor
+            v.layer?.borderColor = ClaudeTheme.stroke.cgColor
+        }
+        detailPanel.translatesAutoresizingMaskIntoConstraints = false
+        detailPanel.wantsLayer = true
+        detailPanel.layer?.cornerRadius = 22
+        detailPanel.layer?.cornerCurve = .continuous
+        detailPanel.layer?.borderWidth = 1
+        detailPanel.layer?.shadowColor = ClaudeTheme.accent.withAlphaComponent(0.10).cgColor
+        detailPanel.layer?.shadowOpacity = 1.0
+        detailPanel.layer?.shadowRadius = 18
+        detailPanel.layer?.shadowOffset = CGSize(width: 0, height: -4)
+        detailContainer.addSubview(detailPanel)
+
+        NSLayoutConstraint.activate([
+            detailPanel.topAnchor.constraint(equalTo: detailContainer.topAnchor),
+            detailPanel.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor),
+            detailPanel.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor),
+            detailPanel.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor),
         ])
     }
 
@@ -253,15 +276,16 @@ final class SettingsWindowController: NSWindowController {
         }
 
         // 替换详情视图
-        for sub in detailContainer.subviews { sub.removeFromSuperview() }
+        currentDetailView?.removeFromSuperview()
         let v = vc.view
         v.translatesAutoresizingMaskIntoConstraints = false
         detailContainer.addSubview(v)
+        currentDetailView = v
         NSLayoutConstraint.activate([
-            v.topAnchor.constraint(equalTo: detailContainer.topAnchor),
-            v.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor),
-            v.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor),
-            v.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor),
+            v.topAnchor.constraint(equalTo: detailContainer.topAnchor, constant: 4),
+            v.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor, constant: 4),
+            v.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor, constant: -4),
+            v.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor, constant: -4),
         ])
     }
 
@@ -335,7 +359,7 @@ final class SidebarItemView: NSView {
         wantsLayer = true
         layer?.masksToBounds = false
 
-        bgLayer.cornerRadius = 10
+        bgLayer.cornerRadius = 12
         bgLayer.cornerCurve = .continuous
         layer?.addSublayer(bgLayer)
 
@@ -372,20 +396,20 @@ final class SidebarItemView: NSView {
         addSubview(iconBg, positioned: .below, relativeTo: iconView)
 
         NSLayoutConstraint.activate([
-            iconBg.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconBg.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
             iconBg.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconBg.widthAnchor.constraint(equalToConstant: 26),
-            iconBg.heightAnchor.constraint(equalToConstant: 26),
+            iconBg.widthAnchor.constraint(equalToConstant: 28),
+            iconBg.heightAnchor.constraint(equalToConstant: 28),
 
             iconView.centerXAnchor.constraint(equalTo: iconBg.centerXAnchor),
             iconView.centerYAnchor.constraint(equalTo: iconBg.centerYAnchor),
 
             titleLabel.leadingAnchor.constraint(equalTo: iconBg.trailingAnchor, constant: 10),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 7),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
+            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
 
             subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 1),
+            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
             subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
         ])
 
@@ -416,7 +440,7 @@ final class SidebarItemView: NSView {
         strokeLayer.frame = bounds
         let inset: CGFloat = 0.5
         let r = bounds.insetBy(dx: inset, dy: inset)
-        strokeLayer.path = CGPath(roundedRect: r, cornerWidth: 10 - inset, cornerHeight: 10 - inset, transform: nil)
+        strokeLayer.path = CGPath(roundedRect: r, cornerWidth: 12 - inset, cornerHeight: 12 - inset, transform: nil)
         CATransaction.commit()
     }
 
@@ -450,7 +474,7 @@ final class SidebarItemView: NSView {
                 subtitleLabel.textColor = ClaudeTheme.inkSecondary
                 iconView.contentTintColor = ClaudeTheme.secondaryAccent
             } else {
-                bgLayer.backgroundColor = NSColor.clear.cgColor
+                bgLayer.backgroundColor = ClaudeTheme.cream.withAlphaComponent(0.26).cgColor
                 strokeLayer.strokeColor = NSColor.clear.cgColor
                 iconBg.layer?.backgroundColor = ClaudeTheme.controlFill.cgColor
                 titleLabel.textColor = ClaudeTheme.ink
