@@ -37,6 +37,16 @@ enum Glass {
 
     // 动画
     static let animDuration: CFTimeInterval = 0.18
+
+    static func separator(height: CGFloat) -> NSView {
+        let view = NSView()
+        view.wantsLayer = true
+        view.layer?.backgroundColor = NSColor.white.withAlphaComponent(separatorAlpha).cgColor
+        view.translatesAutoresizingMaskIntoConstraints = false
+        view.widthAnchor.constraint(equalToConstant: 1).isActive = true
+        view.heightAnchor.constraint(equalToConstant: height).isActive = true
+        return view
+    }
 }
 
 enum LineWidthLevel: CGFloat, CaseIterable {

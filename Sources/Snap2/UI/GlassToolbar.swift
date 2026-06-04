@@ -123,7 +123,7 @@ final class GlassToolbar: NSView {
             toolButtons[tool] = btn
             stack.addArrangedSubview(btn)
         }
-        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(Glass.separator(height: 22))
 
         // 2. 颜色组
         for color in AnnotationPalette.colors {
@@ -133,7 +133,7 @@ final class GlassToolbar: NSView {
             colorButtons.append(sw)
             stack.addArrangedSubview(sw)
         }
-        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(Glass.separator(height: 22))
 
         // 3. 线宽组
         for level in LineWidthLevel.allCases {
@@ -143,7 +143,7 @@ final class GlassToolbar: NSView {
             widthButtons[level] = dot
             stack.addArrangedSubview(dot)
         }
-        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(Glass.separator(height: 22))
 
         // 4. 操作组
         let actions: [(String, String, Selector)] = [
@@ -172,16 +172,6 @@ final class GlassToolbar: NSView {
         syncColorHighlight()
         syncWidthHighlight()
         applyMosaicModeIfNeeded()
-    }
-
-    private func separator() -> NSView {
-        let v = NSView()
-        v.wantsLayer = true
-        v.layer?.backgroundColor = NSColor.white.withAlphaComponent(Glass.separatorAlpha).cgColor
-        v.translatesAutoresizingMaskIntoConstraints = false
-        v.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        v.heightAnchor.constraint(equalToConstant: 22).isActive = true
-        return v
     }
 
     private func syncToolHighlight() {

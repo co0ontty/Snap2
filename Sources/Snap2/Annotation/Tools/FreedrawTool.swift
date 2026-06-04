@@ -10,20 +10,7 @@ struct FreedrawTool: AnnotationTool {
         guard element.points.count >= 2 else { return }
 
         let path = createSmoothPath(from: element.points)
-
-        context.saveGState()
-
-        // 设置描边颜色和线宽
-        context.setStrokeColor(element.color.cgColor)
-        context.setLineWidth(element.lineWidth)
-        context.setLineCap(.round)
-        context.setLineJoin(.round)
-
-        // 描边路径
-        context.addPath(path.toCGPath())
-        context.strokePath()
-
-        context.restoreGState()
+        AnnotationDrawing.stroke(path, element: element, in: context)
     }
 
     func createPath(from startPoint: NSPoint, to endPoint: NSPoint) -> NSBezierPath {

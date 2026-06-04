@@ -343,28 +343,7 @@ final class RecordingManager: NSObject {
     // MARK: - 输出目录 / 文件名
 
     private func computeOutputURL() -> URL {
-        let dir = saveDirectoryURL()
-        let stamp = timestamp()
-        let filename = "Snap2_\(stamp).mp4"
-        // 创建目录（与截图保存路径一致逻辑）
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent(filename)
-    }
-
-    private func saveDirectoryURL() -> URL {
-        if let dir = UserDefaults.standard.string(forKey: UDKey.saveDirectory) {
-            return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
-        }
-        if let desktop = NSSearchPathForDirectoriesInDomains(.desktopDirectory, .userDomainMask, true).first {
-            return URL(fileURLWithPath: desktop)
-        }
-        return URL(fileURLWithPath: NSHomeDirectory())
-    }
-
-    private func timestamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd_HHmmss"
-        return f.string(from: Date())
+        OutputFileHelper.recordingURL()
     }
 }
 
@@ -430,6 +409,8 @@ extension RecordingManager: SCStreamOutput {
             writer?.append(videoBuffer: sampleBuffer)
         case .audio:
             writer?.append(audioBuffer: sampleBuffer)
+        case .microphone:
+            break
         @unknown default:
             break
         }

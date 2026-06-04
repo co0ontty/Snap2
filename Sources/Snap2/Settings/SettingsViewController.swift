@@ -508,7 +508,7 @@ final class SettingsViewController: NSViewController {
         appName.textColor = ClaudeTheme.ink
         appName.backgroundColor = .clear
 
-        let appVer = NSTextField(labelWithString: "版本 \(appVersion()) (\(appBuild()))")
+        let appVer = NSTextField(labelWithString: "版本 \(AppInfo.version) (\(AppInfo.build))")
         appVer.font = NSFont.systemFont(ofSize: 11)
         appVer.textColor = ClaudeTheme.inkTertiary
         appVer.backgroundColor = .clear
@@ -603,14 +603,6 @@ final class SettingsViewController: NSViewController {
             infoCard.leadingAnchor.constraint(equalTo: mainStack.leadingAnchor),
             infoCard.trailingAnchor.constraint(equalTo: mainStack.trailingAnchor),
         ])
-    }
-
-    private func appVersion() -> String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-    }
-
-    private func appBuild() -> String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleVersion") as? String ?? "1"
     }
 
     // MARK: - 事件处理

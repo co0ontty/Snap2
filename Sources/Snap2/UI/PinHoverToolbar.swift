@@ -288,7 +288,7 @@ private final class PinHoverToolbarView: NSView {
 
         let grip = PinToolbarGripView()
         stack.addArrangedSubview(grip)
-        stack.addArrangedSubview(separator())
+        stack.addArrangedSubview(Glass.separator(height: 20))
 
         for tool in Self.toolbarTools {
             let button = ToolGlassButton(tool: tool, size: Self.buttonSize)
@@ -298,16 +298,6 @@ private final class PinHoverToolbarView: NSView {
         }
         // 关闭按钮已移除——PinnedImageWindow 右上角自身的 ✕ 承担关闭职责，
         // 此处保持「重新标注入口」语义单一，避免两个 ✕ 让用户困惑。
-    }
-
-    private func separator() -> NSView {
-        let view = NSView()
-        view.wantsLayer = true
-        view.layer?.backgroundColor = NSColor.white.withAlphaComponent(Glass.separatorAlpha).cgColor
-        view.translatesAutoresizingMaskIntoConstraints = false
-        view.widthAnchor.constraint(equalToConstant: 1).isActive = true
-        view.heightAnchor.constraint(equalToConstant: 20).isActive = true
-        return view
     }
 
     @objc private func editToolTapped(_ sender: ToolGlassButton) {

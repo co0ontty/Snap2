@@ -161,10 +161,7 @@ class StatusBarController {
         menu.addItem(updateItem)
 
         // 上次启动检查已发现新版本：直接以"新版本可用"形态出现（语义版本比较）
-        if let latest = UserDefaults.standard.string(forKey: UDKey.lastKnownLatestVersion),
-           !latest.isEmpty,
-           UpdateChecker.isVersionNewer(latest, than: UpdateChecker.shared.currentVersion)
-        {
+        if let latest = UpdateAvailabilityStore.cachedLatestVersionIfNewer {
             applyUpdateAvailable(latestVersion: latest)
         }
 

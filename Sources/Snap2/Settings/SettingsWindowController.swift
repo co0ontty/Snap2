@@ -178,7 +178,7 @@ final class SettingsWindowController: NSWindowController {
         }
 
         // 底部：可点击版本号 + 升级胶囊（默认隐藏）
-        versionButton = VersionLinkButton(text: "v\(appVersion())")
+        versionButton = VersionLinkButton(text: "v\(AppInfo.version)")
         versionButton.onClick = { [weak self] in self?.triggerUpdateCheck() }
 
         upgradePill = UpgradePillButton()
@@ -256,10 +256,6 @@ final class SettingsWindowController: NSWindowController {
         ])
     }
 
-    private func appVersion() -> String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "1.0"
-    }
-
     // MARK: - 切换
 
     private func select(tab: Tab) {
@@ -300,10 +296,7 @@ final class SettingsWindowController: NSWindowController {
     }
 
     private func applyInitialUpdateState() {
-        let current = UpdateChecker.shared.currentVersion
-        if let latest = UserDefaults.standard.string(forKey: UDKey.lastKnownLatestVersion),
-           !latest.isEmpty,
-           UpdateChecker.isVersionNewer(latest, than: current) {
+        if let latest = UpdateAvailabilityStore.cachedLatestVersionIfNewer {
             upgradePill.setLatestVersion(latest)
             upgradePill.isHidden = false
         } else {

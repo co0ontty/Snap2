@@ -1090,10 +1090,9 @@ final class SelectionView: NSView {
     private func silentSaveAndClose() {
         let image = renderFinalImage()
         let format = UserDefaults.standard.string(forKey: UDKey.imageFormat) ?? "png"
-        let ext = format == "jpeg" ? "jpg" : "png"
-        let dir = saveDirectoryURL()
-        let filename = "Snap2_\(timestamp()).\(ext)"
-        let url = dir.appendingPathComponent(filename)
+        let url = OutputFileHelper.screenshotURL(format: format)
+        let dir = url.deletingLastPathComponent()
+        let filename = url.lastPathComponent
         let jpegQuality = UserDefaults.standard.object(forKey: UDKey.jpegQuality) as? Double ?? 0.85
 
         // 立即反馈：toast 先弹 + overlay 立刻关。后续的写盘失败再补一条错误 toast。
@@ -1134,16 +1133,6 @@ final class SelectionView: NSView {
                 }
             }
         }
-    }
-
-    private func saveDirectoryURL() -> URL {
-        if let dir = UserDefaults.standard.string(forKey: UDKey.saveDirectory) {
-            return URL(fileURLWithPath: (dir as NSString).expandingTildeInPath)
-        }
-        if let desktop = NSSearchPathForDirectoriesInDomains(.desktopDirectory, .userDomainMask, true).first {
-            return URL(fileURLWithPath: desktop)
-        }
-        return URL(fileURLWithPath: NSHomeDirectory())
     }
 
     /// 取出 NSImage 中第一张可用的 CGImage。
@@ -1284,12 +1273,6 @@ final class SelectionView: NSView {
         let result = NSImage(size: pointSize)
         result.addRepresentation(outRep)
         return result
-    }
-
-    private func timestamp() -> String {
-        let f = DateFormatter()
-        f.dateFormat = "yyyyMMdd_HHmmss"
-        return f.string(from: Date())
     }
 
     // MARK: - 标注玻璃工具栏
