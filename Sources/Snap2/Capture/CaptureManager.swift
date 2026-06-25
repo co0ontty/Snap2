@@ -11,6 +11,17 @@ final class CaptureManager {
 
     private var overlayWindows: [OverlayWindow] = []
     private(set) var isCapturing = false
+    private var didPushCaptureCursor = false
+    private struct CaptureTarget {
+        let screen: NSScreen
+        let displayID: CGDirectDisplayID?
+        let scale: CGFloat
+        let frameSize: NSSize
+    }
+    private struct FrozenCapture {
+        let cgImage: CGImage
+        let pointSize: NSSize
+    }
     /// 当前被"重新标注"的钉图——会在编辑期间隐藏，结束后再 orderFront 回来
     private var pinBeingEdited: PinnedImageWindow?
     /// 本次会话结束时是否要"销毁"被编辑的钉图（而非还原）。
@@ -28,36 +39,74 @@ final class CaptureManager {
             return
         }
         isCapturing = true
-        NSCursor.crosshair.push()
 
-        for screen in NSScreen.screens {
-            let overlay = OverlayWindow(screen: screen)
+        let screens = Self.screensPrioritizingMouseLocation()
+        let targets = screens.map { screen in
+            CaptureTarget(
+                screen: screen,
+                displayID: screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
+                scale: screen.backingScaleFactor,
+                frameSize: screen.frame.size
+            )
+        }
+        guard !targets.isEmpty else {
+            isCapturing = false
+            return
+        }
+
+        // 先在不激活本 App、不盖 overlay 的状态下冻结桌面。
+        // 这样全局热键触发时，鼠标仍然悬停在原应用上，tooltip / hover popover
+        // 不会因为 Snap² 抢焦点或覆盖鼠标命中目标而先消失。
+        Task { @MainActor in
+            var prepared: [(target: CaptureTarget, frozen: FrozenCapture?)] = []
+            for target in targets {
+                if let snap = await self.captureFullScreen(
+                    displayID: target.displayID,
+                    scale: target.scale,
+                    frameSize: target.frameSize)
+                {
+                    prepared.append((
+                        target: target,
+                        frozen: FrozenCapture(cgImage: snap.cgImage, pointSize: snap.pointSize)
+                    ))
+                } else {
+                    prepared.append((target: target, frozen: nil))
+                }
+            }
+            self.presentCaptureOverlays(prepared)
+        }
+    }
+
+    private static func screensPrioritizingMouseLocation() -> [NSScreen] {
+        let screens = NSScreen.screens
+        let mouseLocation = NSEvent.mouseLocation
+        guard let hoveredScreen = screens.first(where: { $0.frame.contains(mouseLocation) }) else {
+            return screens
+        }
+        return [hoveredScreen] + screens.filter { $0 !== hoveredScreen }
+    }
+
+    @MainActor
+    private func presentCaptureOverlays(_ prepared: [(target: CaptureTarget, frozen: FrozenCapture?)]) {
+        guard isCapturing, overlayWindows.isEmpty else { return }
+
+        NSCursor.crosshair.push()
+        didPushCaptureCursor = true
+
+        for item in prepared {
+            let overlay = OverlayWindow(screen: item.target.screen)
+            if let frozen = item.frozen {
+                (overlay.contentView as? SelectionView)?.setFrozenSnapshot(
+                    cgImage: frozen.cgImage,
+                    pointSize: frozen.pointSize
+                )
+            }
             overlay.makeKeyAndOrderFront(nil)
             overlayWindows.append(overlay)
         }
 
         NSApp.activate(ignoringOtherApps: true)
         overlayWindows.first?.makeKey()
-
-        // 异步冻结每屏当前画面：覆盖层先以暗色蒙版示人，
-        // 拿到全屏快照后再 setFrozenSnapshot 让选区下方变成"凝固"的桌面，
-        // 避免用户慢慢框选时动态内容（视频/动画）已被划过去。
-        let snapshot = overlayWindows
-        Task { @MainActor in
-            for overlay in snapshot {
-                // NSScreen 非 Sendable——await 前在主 actor 上同步把需要的标量提出来，
-                // 避免跨 actor 边界传递引用。
-                let screen = overlay.targetScreen
-                let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID
-                let scale = screen.backingScaleFactor
-                let frameSize = screen.frame.size
-                if let snap = await self.captureFullScreen(
-                    displayID: displayID, scale: scale, frameSize: frameSize)
-                {
-                    (overlay.contentView as? SelectionView)?.setFrozenSnapshot(cgImage: snap.cgImage, pointSize: snap.pointSize)
-                }
-            }
-        }
     }
 
     /// 捕获指定屏幕的整屏画面，用于"冻结"桌面。
@@ -143,6 +192,7 @@ final class CaptureManager {
         // 3. 启动 overlay（同 startCapture，但只一块屏幕）
         isCapturing = true
         NSCursor.crosshair.push()
+        didPushCaptureCursor = true
         let overlay = OverlayWindow(screen: targetScreen)
         overlay.makeKeyAndOrderFront(nil)
         overlayWindows.append(overlay)
@@ -244,7 +294,10 @@ final class CaptureManager {
     }
 
     private func closeAllOverlays() {
-        NSCursor.pop()
+        if didPushCaptureCursor {
+            NSCursor.pop()
+            didPushCaptureCursor = false
+        }
         for window in overlayWindows {
             (window.contentView as? SelectionView)?.prepareForClose()
             window.contentView = nil
