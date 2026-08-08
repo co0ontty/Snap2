@@ -57,10 +57,15 @@ final class CaptureManager {
         // 先在不激活本 App、不盖 overlay 的状态下冻结桌面。
         // 这样全局热键触发时，鼠标仍然悬停在原应用上，tooltip / hover popover
         // 不会因为 Snap² 抢焦点或覆盖鼠标命中目标而先消失。
+        //
+        // captureFullScreen 走同步的 CGDisplayCreateImage，整个多屏循环不会让出主线程，
+        // 避免了旧 SCK async 路径下 await 期间被插入焦点事件、导致 hover 提前消失的问题。
+        // 仍包在 Task 里是为了把"冻结 + 盖 overlay"与热键回调解耦——同步执行完直接
+        // 进入 presentCaptureOverlays，时序比旧 async 路径更紧凑。
         Task { @MainActor in
             var prepared: [(target: CaptureTarget, frozen: FrozenCapture?)] = []
             for target in targets {
-                if let snap = await self.captureFullScreen(
+                if let snap = self.captureFullScreen(
                     displayID: target.displayID,
                     scale: target.scale,
                     frameSize: target.frameSize)
@@ -110,54 +115,37 @@ final class CaptureManager {
     }
 
     /// 捕获指定屏幕的整屏画面，用于"冻结"桌面。
-    /// 调用方负责在主 actor 上从 NSScreen 提取 displayID/scale/frameSize 标量后再传进来——
-    /// 把 NSScreen 留在主 actor，函数内部只跟值类型打交道，跨 await 边界不会引发并发问题。
+    ///
+    /// 这里走 CoreGraphics 的 `CGDisplayCreateImage`（同步）而非 ScreenCaptureKit，
+    /// 关键原因：SCK 的 `SCShareableContent` + `SCScreenshotManager.captureImage` 都是 async，
+    /// 会让出主线程；多屏串行循环下累计的 await 窗口里，主 runloop 会被 pump，
+    /// 任何被插入的激活/焦点事件都可能让前台 app resign active，导致 hover / tooltip
+    /// 在下一屏截图前消失。`CGDisplayCreateImage` 同步返回、不让出主线程，
+    /// 整个多屏冻结就是一个严格同步的 for 循环，从根上消除了这个窗口。
+    ///
+    /// 调用方负责在主 actor 上从 NSScreen 提取 displayID/scale/frameSize 标量后再传进来。
+    /// `scale` 仅用于调用方参数一致性，本函数不再引用——CGDisplayCreateImage 自动按
+    /// 显示器物理像素抓取（已含 Retina），返回的 CGImage 像素尺寸 = frameSize × scale。
+    /// `pointSize` 仍传 frameSize（逻辑点），下游 SelectionView 用 像素/点 反推 scale。
+    ///
     /// 返回原始像素 CGImage 与对应的逻辑点尺寸——上层不再走 NSImage round-trip，
     /// 避免 cgImage(forProposedRect:) 在某些机型/版本上把高分图重采样回点级分辨率。
     private func captureFullScreen(displayID: CGDirectDisplayID?,
                                    scale: CGFloat,
-                                   frameSize: NSSize) async
+                                   frameSize: NSSize)
         -> (cgImage: CGImage, pointSize: NSSize)?
     {
-        do {
-            let content = try await SCShareableContent.excludingDesktopWindows(false, onScreenWindowsOnly: true)
-            guard let scDisplay = content.displays.first(where: { display in
-                display.displayID == displayID
-            }) ?? content.displays.first else { return nil }
-
-            // 按 application 排除整个 Snap2 进程，而不是按窗口列表过滤。
-            // 旧实现 `content.windows.filter { ... }` 只能匹配 SCShareableContent 抓
-            // 快照那一刻已经在 WindowServer 注册为 on-screen 的窗口；overlay 在
-            // `makeKeyAndOrderFront` 之后到真正"上屏"之间有几帧延迟（外接显示器尤其
-            // 明显），这段时间内拉到的 content.windows 不包含 overlay → overlay 不被
-            // 排除 → SCK 实际截图时 overlay 已经把 30% 黑色蒙版画上去，被一起截进
-            // frozenCGImage，结果就是"桌面截图偏暗"。
-            // 改为按 application 排除后，policy 在 capture 时生效，无论 overlay 何时
-            // 上屏都不会进入截图。
-            let selfBundleID = AppInfo.currentBundleID
-            let excludeApps = content.applications.filter {
-                $0.bundleIdentifier == selfBundleID
-            }
-            let filter = SCContentFilter(display: scDisplay,
-                                          excludingApplications: excludeApps,
-                                          exceptingWindows: [])
-
-            let config = SCStreamConfiguration()
-            config.width = Int(frameSize.width * scale)
-            config.height = Int(frameSize.height * scale)
-            config.scalesToFit = false
-            config.showsCursor = false
-            // 显式保留广色域：默认值在不同 macOS 版本/显示器上不一致，
-            // 不指定时部分机型会回落到 sRGB，导致 P3 屏幕上的饱和色变暗变灰。
-            config.colorSpaceName = CGColorSpace.displayP3
-            config.pixelFormat = kCVPixelFormatType_32BGRA
-
-            let cgImage = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: config)
-            return (cgImage, frameSize)
-        } catch {
-            NSLog("[CaptureManager] 全屏冻结失败: \(error.localizedDescription)")
+        // CGDisplayCreateImage 抓的是 framebuffer 全量，无法排除调用方自身窗口。
+        // 但本函数只在 startCapture 里、overlay 创建之前被调用，此刻屏幕上还没有
+        // Snap² 的任何窗口，因此无需排除自身——这是能用同步 CG 路径的前提。
+        // （选区阶段的二次精确截图走 captureInline，它用 SCK 的 excludingApplications
+        // 排除已上屏的 overlay，那条路径保持不变。）
+        guard let displayID else { return nil }
+        guard let cgImage = CGDisplayCreateImage(displayID) else {
+            NSLog("[CaptureManager] 全屏冻结失败: CGDisplayCreateImage 返回 nil (displayID=\(displayID))")
             return nil
         }
+        return (cgImage, frameSize)
     }
 
     func cancelCapture() {
