@@ -50,7 +50,9 @@ final class SettingsWindowController: NSWindowController {
     private var currentTab: Tab = .general
 
     private init() {
-        let size = NSSize(width: 860, height: 560)
+        // 560 → 620：通用页新增"悬停保持增强"一行（card1 变两行）后，
+        // JPEG 质量行展开的最坏情况会超出旧高度，整体加高让所有分页留有余量。
+        let size = NSSize(width: 860, height: 620)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
             styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],

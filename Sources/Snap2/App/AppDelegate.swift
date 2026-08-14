@@ -71,7 +71,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
                            name: .recordingRequested, object: nil)
     }
 
-    @objc private func handleStartCapture(_ notification: Notification) {
+    @MainActor @objc private func handleStartCapture(_ notification: Notification) {
         // 录屏进行时不允许触发截图——保护正在写盘的视频会话。
         // 用户按了全局热键以为没反应，所以这里弹一条 toast 明确告知（菜单条已 disabled，
         // 但热键路径没有视觉反馈）。

@@ -7,7 +7,9 @@ import ScreenCaptureKit
 final class CaptureManager {
 
     static let shared = CaptureManager()
-    private init() {}
+    private init() {
+        installModifierPreFreezeMonitor()
+    }
 
     private var overlayWindows: [OverlayWindow] = []
     private(set) var isCapturing = false
@@ -18,10 +20,6 @@ final class CaptureManager {
         let scale: CGFloat
         let frameSize: NSSize
     }
-    private struct FrozenCapture {
-        let cgImage: CGImage
-        let pointSize: NSSize
-    }
     /// 当前被"重新标注"的钉图——会在编辑期间隐藏，结束后再 orderFront 回来
     private var pinBeingEdited: PinnedImageWindow?
     /// 本次会话结束时是否要"销毁"被编辑的钉图（而非还原）。
@@ -29,8 +27,119 @@ final class CaptureManager {
     /// 取消路径（Esc / 关闭按钮）保持 false，钉图照旧 orderFront 回来。
     private var shouldDiscardEditedPinOnClose = false
 
+    // MARK: - 修饰键预冻结（抢跑）
+
+    /// 预冻结任务槽：修饰键按满那一刻后台发起，热键触发时一次性消费。
+    private var preFreezeLock = NSLock()
+    private var preFreeze: ParallelDisplayFreezer?
+    /// NSEvent 监听 token（app 生命周期内存活，不移除）。
+    private var flagsChangedMonitors: [Any?] = []
+    /// 上一次 flagsChanged 时"我们关心的四个修饰键"的状态，用于上升沿检测。
+    private var lastRelevantFlags: NSEvent.ModifierFlags = []
+
+    /// 监听 flagsChanged：当修饰键状态在上升沿"恰好等于"截图热键的修饰键组合时
+    /// （例如 Ctrl+Shift+A 的 Ctrl↓ → Shift↓ 完成、A 还没按下），立刻在后台并行冻结
+    /// 所有显示器。
+    ///
+    /// 为什么要抢跑到修饰键阶段——热键 keyDown 才截图有两个赢不了的比赛：
+    ///  a) Chrome / Electron 会把裸修饰键的 keydown 派发给网页，不少 hover UI
+    ///     "按任意键就收起"；等 A 键 keyDown 到来时帧里早就没了；
+    ///  b) Carbon 热键只吞 keyDown，松键产生的 keyUp / flagsChanged 仍会投递给
+    ///     前台 app，慢机器 / 多屏下现场抓帧经常输给松键。
+    /// 在修饰键按满的瞬间抓帧，a / b 两类消失事件都还没发生（或还没渲染上屏）。
+    ///
+    /// 权限前提：全局监听键盘类事件（flagsChanged）需要 app 被信任（辅助功能 /
+    /// 输入监控）。未授权时系统静默不派发——监听器无害，授权后（无需重启）自动生效。
+    /// 无屏幕录制权限时不装监听：CGDisplayCreateImage 只会返回 nil，白烧 CPU；
+    /// 该权限授权后必须重启 app 才生效，所以启动时查一次就够。
+    private func installModifierPreFreezeMonitor() {
+        guard CGPreflightScreenCaptureAccess() else {
+            NSLog("[CaptureManager] 预冻结未启用：缺少屏幕录制权限")
+            return
+        }
+        let onFlags: (NSEvent) -> Void = { [weak self] event in
+            guard let self else { return }
+            let update = { self.relevantModifierFlagsChanged(to: event.modifierFlags) }
+            // NSEvent 监听回调常规在主线程到达；万一不在，跳主线程处理
+            // （NSScreen / RecordingManager 状态都只能主线程摸）。
+            if Thread.isMainThread { update() } else { DispatchQueue.main.async(execute: update) }
+        }
+        flagsChangedMonitors.append(
+            NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged, handler: onFlags)
+        )
+        flagsChangedMonitors.append(
+            NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { event in
+                onFlags(event)
+                return event
+            }
+        )
+    }
+
+    /// flagsChanged 主线程处理：命中"上升沿 == 截图热键修饰键"才触发抢跑。
+    private func relevantModifierFlagsChanged(to rawFlags: NSEvent.ModifierFlags) {
+        let relevant: NSEvent.ModifierFlags = [.command, .control, .option, .shift]
+        let current = rawFlags.intersection(relevant)
+        let previous = lastRelevantFlags
+        lastRelevantFlags = current
+
+        // 热键可被用户改绑，在事件时刻实时取当前绑定；裸键热键无从预判，跳过。
+        let target = HotkeyManager.shared.cocoaModifiers(for: .capture)
+        guard !target.isEmpty, current == target, previous != current else { return }
+
+        triggerPreFreeze()
+    }
+
+    /// 后台发起一次全显示器并行冻结，存入预冻结槽。
+    private func triggerPreFreeze() {
+        // overlay / 录屏进行中不需要也不该抢跑（画面里会有我们自己的 UI）。
+        guard !isCapturing, !RecordingManager.shared.isActive else { return }
+
+        let requests = NSScreen.screens.compactMap { screen -> ParallelDisplayFreezer.Request? in
+            guard let id = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")]
+                    as? CGDirectDisplayID else { return nil }
+            return ParallelDisplayFreezer.Request(displayID: id, frameSize: screen.frame.size)
+        }
+        guard !requests.isEmpty else { return }
+
+        let freezer = ParallelDisplayFreezer(requests: requests)
+        preFreezeLock.lock()
+        preFreeze = freezer
+        preFreezeLock.unlock()
+
+        // 抢跑帧描述的是"按下修饰键那一瞬"的世界，时效极短。没被热键消费掉
+        // （用户只是按了同组合的其它快捷键）就尽快释放，避免多屏大图常驻内存。
+        DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self, weak freezer] in
+            guard let self, let freezer else { return }
+            self.preFreezeLock.lock()
+            if self.preFreeze === freezer { self.preFreeze = nil }
+            self.preFreezeLock.unlock()
+        }
+    }
+
+    /// 一次性取走"新鲜"的预冻结任务；过期或不存在返回 nil（并清槽）。
+    private func takeFreshPreFreeze(maxAgeMilliseconds: Double) -> ParallelDisplayFreezer? {
+        preFreezeLock.lock()
+        defer { preFreezeLock.unlock() }
+        guard let freezer = preFreeze, freezer.ageMilliseconds <= maxAgeMilliseconds else {
+            preFreeze = nil
+            return nil
+        }
+        preFreeze = nil
+        return freezer
+    }
+
     // MARK: - 开始截图
 
+    /// 全屏冻结入口。**整条链路同步、零跳变**：热键回调（主线程）→ 同步通知 →
+    /// 本方法 → 有界等待并行冻结 → 盖 overlay。中间没有任何 `DispatchQueue.main.async` /
+    /// `Task { @MainActor }` 跳变——每一跳都会让主 runloop 多转一圈，pump 出的
+    /// 激活 / 焦点 / 松键事件都可能让前台 app 的 hover 提前消失。冻结期间阻塞主线程
+    /// 反而是特性：focus 事件没机会插队。
+    ///
+    /// 冻结帧来源（按优先级）：
+    ///  1. **预冻结抢跑帧**——修饰键按满那一刻抓的，早于 A 键 keyDown 与所有松键事件；
+    ///  2. **现场并行补抓**——只补预冻结缺失 / 过期 / 失败的显示器，并行发起、有界等待。
+    @MainActor
     func startCapture() {
         guard !isCapturing else { return }
         // 与录屏互斥：录屏正在进行（取景或写盘）期间禁止启动截图，避免视频会话被遮罩干扰
@@ -54,32 +163,33 @@ final class CaptureManager {
             return
         }
 
-        // 先在不激活本 App、不盖 overlay 的状态下冻结桌面。
-        // 这样全局热键触发时，鼠标仍然悬停在原应用上，tooltip / hover popover
-        // 不会因为 Snap² 抢焦点或覆盖鼠标命中目标而先消失。
-        //
-        // captureFullScreen 走同步的 CGDisplayCreateImage，整个多屏循环不会让出主线程，
-        // 避免了旧 SCK async 路径下 await 期间被插入焦点事件、导致 hover 提前消失的问题。
-        // 仍包在 Task 里是为了把"冻结 + 盖 overlay"与热键回调解耦——同步执行完直接
-        // 进入 presentCaptureOverlays，时序比旧 async 路径更紧凑。
-        Task { @MainActor in
-            var prepared: [(target: CaptureTarget, frozen: FrozenCapture?)] = []
-            for target in targets {
-                if let snap = self.captureFullScreen(
-                    displayID: target.displayID,
-                    scale: target.scale,
-                    frameSize: target.frameSize)
-                {
-                    prepared.append((
-                        target: target,
-                        frozen: FrozenCapture(cgImage: snap.cgImage, pointSize: snap.pointSize)
-                    ))
-                } else {
-                    prepared.append((target: target, frozen: nil))
-                }
-            }
-            self.presentCaptureOverlays(prepared)
+        var frozen: [CGDirectDisplayID: ParallelDisplayFreezer.FrozenFrame] = [:]
+
+        // 1) 消费新鲜的预冻结帧。抢跑通常在几十毫秒前就已发起，wait 大多立即返回；
+        //    若用户按 A 极快、抓取仍在途，这里最多再等 250ms 收尾。
+        if let pre = takeFreshPreFreeze(maxAgeMilliseconds: 400) {
+            let frames = pre.wait(timeout: .milliseconds(250))
+            for (id, frame) in frames { frozen[id] = frame }
+            NSLog("[CaptureManager] 使用预冻结帧：\(frames.count) 屏，age≈\(Int(pre.ageMilliseconds))ms")
         }
+
+        // 2) 缺口的显示器现场并行补抓（无预冻结权限 / 预冻结过期 / 单屏失败都落在这里）。
+        let missing = targets.compactMap { target -> ParallelDisplayFreezer.Request? in
+            guard let id = target.displayID, frozen[id] == nil else { return nil }
+            return ParallelDisplayFreezer.Request(displayID: id, frameSize: target.frameSize)
+        }
+        if !missing.isEmpty {
+            let freezer = ParallelDisplayFreezer(requests: missing)
+            let frames = freezer.wait(timeout: .milliseconds(300))
+            for (id, frame) in frames { frozen[id] = frame }
+            if frames.count < missing.count {
+                NSLog("[CaptureManager] 现场补抓不完整：\(frames.count)/\(missing.count) 屏，缺的屏将走 SCK live 兜底")
+            }
+        }
+
+        presentCaptureOverlays(targets.map { target in
+            (target: target, frozen: target.displayID.flatMap { frozen[$0] })
+        })
     }
 
     private static func screensPrioritizingMouseLocation() -> [NSScreen] {
@@ -92,7 +202,9 @@ final class CaptureManager {
     }
 
     @MainActor
-    private func presentCaptureOverlays(_ prepared: [(target: CaptureTarget, frozen: FrozenCapture?)]) {
+    private func presentCaptureOverlays(
+        _ prepared: [(target: CaptureTarget, frozen: ParallelDisplayFreezer.FrozenFrame?)]
+    ) {
         guard isCapturing, overlayWindows.isEmpty else { return }
 
         NSCursor.crosshair.push()
@@ -112,40 +224,6 @@ final class CaptureManager {
 
         NSApp.activate(ignoringOtherApps: true)
         overlayWindows.first?.makeKey()
-    }
-
-    /// 捕获指定屏幕的整屏画面，用于"冻结"桌面。
-    ///
-    /// 这里走 CoreGraphics 的 `CGDisplayCreateImage`（同步）而非 ScreenCaptureKit，
-    /// 关键原因：SCK 的 `SCShareableContent` + `SCScreenshotManager.captureImage` 都是 async，
-    /// 会让出主线程；多屏串行循环下累计的 await 窗口里，主 runloop 会被 pump，
-    /// 任何被插入的激活/焦点事件都可能让前台 app resign active，导致 hover / tooltip
-    /// 在下一屏截图前消失。`CGDisplayCreateImage` 同步返回、不让出主线程，
-    /// 整个多屏冻结就是一个严格同步的 for 循环，从根上消除了这个窗口。
-    ///
-    /// 调用方负责在主 actor 上从 NSScreen 提取 displayID/scale/frameSize 标量后再传进来。
-    /// `scale` 仅用于调用方参数一致性，本函数不再引用——CGDisplayCreateImage 自动按
-    /// 显示器物理像素抓取（已含 Retina），返回的 CGImage 像素尺寸 = frameSize × scale。
-    /// `pointSize` 仍传 frameSize（逻辑点），下游 SelectionView 用 像素/点 反推 scale。
-    ///
-    /// 返回原始像素 CGImage 与对应的逻辑点尺寸——上层不再走 NSImage round-trip，
-    /// 避免 cgImage(forProposedRect:) 在某些机型/版本上把高分图重采样回点级分辨率。
-    private func captureFullScreen(displayID: CGDirectDisplayID?,
-                                   scale: CGFloat,
-                                   frameSize: NSSize)
-        -> (cgImage: CGImage, pointSize: NSSize)?
-    {
-        // CGDisplayCreateImage 抓的是 framebuffer 全量，无法排除调用方自身窗口。
-        // 但本函数只在 startCapture 里、overlay 创建之前被调用，此刻屏幕上还没有
-        // Snap² 的任何窗口，因此无需排除自身——这是能用同步 CG 路径的前提。
-        // （选区阶段的二次精确截图走 captureInline，它用 SCK 的 excludingApplications
-        // 排除已上屏的 overlay，那条路径保持不变。）
-        guard let displayID else { return nil }
-        guard let cgImage = CGDisplayCreateImage(displayID) else {
-            NSLog("[CaptureManager] 全屏冻结失败: CGDisplayCreateImage 返回 nil (displayID=\(displayID))")
-            return nil
-        }
-        return (cgImage, frameSize)
     }
 
     func cancelCapture() {
@@ -236,7 +314,8 @@ final class CaptureManager {
                     return
                 }
 
-                // 排除自身所有窗口——按 application 而非按窗口列表，理由见 captureFullScreen
+                // 排除自身所有窗口——按 application 而非按窗口列表：
+                // overlay 上屏后窗口列表可能变化，按 app 排除更稳
                 let selfBundleID = AppInfo.currentBundleID
                 let excludeApps = content.applications.filter {
                     $0.bundleIdentifier == selfBundleID

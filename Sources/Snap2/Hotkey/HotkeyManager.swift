@@ -180,6 +180,11 @@ final class HotkeyManager {
     func modifiers(for action: Action) -> UInt32 {
         bindings[action]?.modifiers ?? action.defaultCarbonModifiers
     }
+    /// 某个 action 当前绑定对应的 Cocoa 修饰键。
+    /// 供 CaptureManager 的修饰键预冻结监听判断"修饰键已按满 = 热键将至"。
+    func cocoaModifiers(for action: Action) -> NSEvent.ModifierFlags {
+        Self.cocoaModifiers(from: modifiers(for: action))
+    }
 
     /// 与其它 action 的快捷键冲突错误
     enum UpdateError: Error {
@@ -269,10 +274,18 @@ final class HotkeyManager {
     /// 录屏热键的 "toggle" 语义（idle→start、picking→cancel、recording→stop）由 AppDelegate 网关
     /// 按 RecordingManager.state 翻译。这里只发原始 action 通知，避免两条 notification 在同一 runloop
     /// 段相互抵消（同一热键既触发 start 又触发 stop）。
+    ///
+    /// Carbon 回调本来就在主线程：直接同步 post，砍掉 DispatchQueue.main.async 这一跳。
+    /// 截图冻结要的是"按键那一瞬间的世界"——通知链路上每多一跳，主 runloop 就多转
+    /// 一圈，pump 出的激活 / 焦点 / 松键事件都可能让前台 app 的 hover 提前消失。
     fileprivate func dispatch(id: UInt32) {
         guard let action = Action(rawValue: id) else { return }
-        DispatchQueue.main.async {
+        if Thread.isMainThread {
             NotificationCenter.default.post(name: action.notification, object: nil)
+        } else {
+            DispatchQueue.main.async {
+                NotificationCenter.default.post(name: action.notification, object: nil)
+            }
         }
     }
 }

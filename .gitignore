@@ -33,3 +33,6 @@ secrets/
 
 # Claude Code 用户图片上传缓存
 .wand-uploads/
+
+# ZCode 会话工作区
+.zcode/

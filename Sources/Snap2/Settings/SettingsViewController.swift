@@ -1,5 +1,6 @@
 import AppKit
 import Carbon.HIToolbox
+import CoreGraphics
 
 enum SettingsType {
     case general
@@ -31,6 +32,8 @@ final class SettingsViewController: NSViewController {
     private var qualitySlider: NSSlider?
     private var qualityValueLabel: NSTextField?
     private var qualityCard: NSView?
+    private var hoverEnhanceStatusLabel: NSTextField?
+    private var hoverEnhanceButton: NSButton?
 
     // 快捷键设置控件（按 Action 索引，方便重置时刷新对应行）
     private var hotkeyRecorderViews: [HotkeyManager.Action: HotkeyRecorderView] = [:]
@@ -203,14 +206,6 @@ final class SettingsViewController: NSViewController {
         toggle.action = #selector(launchAtLoginChanged(_:))
         launchAtLoginSwitch = toggle
         let row1 = makeRow(label: "开机自启动", control: toggle)
-        card1.addSubview(row1)
-
-        NSLayoutConstraint.activate([
-            row1.topAnchor.constraint(equalTo: card1.topAnchor),
-            row1.leadingAnchor.constraint(equalTo: card1.leadingAnchor),
-            row1.trailingAnchor.constraint(equalTo: card1.trailingAnchor),
-            row1.bottomAnchor.constraint(equalTo: card1.bottomAnchor),
-        ])
 
         // —— 卡片 2: 保存与格式 ——
         let card2 = makeCard(in: parent)
@@ -331,6 +326,52 @@ final class SettingsViewController: NSViewController {
             row3.leadingAnchor.constraint(equalTo: card3.leadingAnchor),
             row3.trailingAnchor.constraint(equalTo: card3.trailingAnchor),
             row3.bottomAnchor.constraint(equalTo: card3.bottomAnchor),
+        ])
+
+        // —— 卡片 4: 悬停保持增强（并入卡片 1 的纵向栈，避免整页超出固定高度）——
+        // 授权辅助功能（或输入监控）后，CaptureManager 的修饰键预冻结监听才能收到
+        // 其它 app 的 flagsChanged——按下快捷键那一刻仍悬停着的 tooltip / hover 卡片
+        // 会被"抢跑冻结"完整保留进截图。未授权时核心截图功能不受影响，只是抢跑不生效。
+        let hoverStatus = NSTextField(labelWithString: Self.isHoverEnhanceAvailable ? "已启用" : "未启用")
+        hoverStatus.font = NSFont.systemFont(ofSize: 12)
+        hoverStatus.textColor = ClaudeTheme.inkSecondary
+        hoverStatus.backgroundColor = .clear
+        hoverEnhanceStatusLabel = hoverStatus
+
+        let authorizeBtn = NSButton(title: "去授权…", target: self,
+                                    action: #selector(authorizeHoverEnhance(_:)))
+        authorizeBtn.bezelStyle = .rounded
+        authorizeBtn.controlSize = .small
+        authorizeBtn.isHidden = Self.isHoverEnhanceAvailable
+        hoverEnhanceButton = authorizeBtn
+
+        let hoverStack = NSStackView(views: [hoverStatus, authorizeBtn])
+        hoverStack.orientation = .horizontal
+        hoverStack.spacing = 10
+        hoverStack.alignment = .centerY
+
+        let row1b = makeRow(label: "悬停保持增强", control: hoverStack)
+
+        let card1Stack = NSStackView()
+        card1Stack.orientation = .vertical
+        card1Stack.spacing = 0
+        card1Stack.alignment = .leading
+        card1Stack.translatesAutoresizingMaskIntoConstraints = false
+        card1Stack.distribution = .fill
+        card1.addSubview(card1Stack)
+        card1Stack.addArrangedSubview(row1)
+        let sep1 = makeSeparator(in: card1Stack)
+        card1Stack.addArrangedSubview(sep1)
+        sep1.widthAnchor.constraint(equalTo: card1Stack.widthAnchor, constant: -32).isActive = true
+        card1Stack.addArrangedSubview(row1b)
+        for v in [row1, row1b] {
+            v.widthAnchor.constraint(equalTo: card1Stack.widthAnchor).isActive = true
+        }
+        NSLayoutConstraint.activate([
+            card1Stack.topAnchor.constraint(equalTo: card1.topAnchor),
+            card1Stack.leadingAnchor.constraint(equalTo: card1.leadingAnchor),
+            card1Stack.trailingAnchor.constraint(equalTo: card1.trailingAnchor),
+            card1Stack.bottomAnchor.constraint(equalTo: card1.bottomAnchor),
         ])
 
         // —— 整体布局 ——
@@ -656,6 +697,31 @@ final class SettingsViewController: NSViewController {
         UpdateChecker.shared.checkManually { _ in
             // alert 流程交给菜单栏控制器（监听 .updateAvailable）；此处只触发拉取
         }
+    }
+
+    // MARK: - 悬停保持增强
+
+    /// 辅助功能或输入监控任一被信任，全局 flagsChanged 监听（预冻结抢跑）即可工作。
+    private static var isHoverEnhanceAvailable: Bool {
+        AXIsProcessTrusted() || CGPreflightListenEventAccess()
+    }
+
+    @objc private func authorizeHoverEnhance(_ sender: NSButton) {
+        // from 传 nil 直接淡入（与 ensureScreenCapturePermission 的引导一致）
+        PermissionAssistant.shared.present(
+            panel: .accessibility,
+            from: nil,
+            onGranted: { [weak self] in
+                self?.refreshHoverEnhanceRow()
+            },
+            onCancel: nil
+        )
+    }
+
+    private func refreshHoverEnhanceRow() {
+        let available = Self.isHoverEnhanceAvailable
+        hoverEnhanceStatusLabel?.stringValue = available ? "已启用" : "未启用"
+        hoverEnhanceButton?.isHidden = available
     }
 
     private func hotkeyDidRecord(action: HotkeyManager.Action,
