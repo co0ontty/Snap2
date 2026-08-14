@@ -409,8 +409,9 @@ extension RecordingManager: SCStreamOutput {
             writer?.append(videoBuffer: sampleBuffer)
         case .audio:
             writer?.append(audioBuffer: sampleBuffer)
-        case .microphone:
-            break
+        // 不写 case .microphone：该枚举值是 macOS 15 SDK 才有的，CI 的 macos-14
+        // runner（部署目标也编译）会报 has no member 'microphone'。本 app 不采集
+        // 麦克风，落到 @unknown default 直接丢弃即可，新旧 SDK 行为一致。
         @unknown default:
             break
         }
