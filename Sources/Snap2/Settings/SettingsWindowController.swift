@@ -14,7 +14,10 @@ final class SettingsWindowController: NSWindowController {
     private var sidebarStack: NSStackView!
     private var sidebarItems: [SidebarItemView] = []
     private var detailColumn: NSView!
-    private var currentDetailView: NSView?
+    /// 当前挂载在 detailColumn 里的滚动视图（切换时整体移除重建）
+    private var detailScrollView: NSScrollView?
+    /// documentView ↔ clipView 的适配约束；换页前显式 deactivate，防止换回旧页时残留死约束
+    private var detailFitConstraints: [NSLayoutConstraint] = []
 
     // 侧边栏底部 — 可点击版本号 + 升级胶囊
     private var versionButton: VersionLinkButton!
@@ -219,8 +222,15 @@ final class SettingsWindowController: NSWindowController {
         case .about:   vc = aboutVC
         }
 
-        // 替换详情视图：详情页装进无框 NSScrollView，内容超长时可滚动
-        currentDetailView?.superview?.removeFromSuperview()
+        // 换页 = 整体摘掉旧滚动视图。
+        // 旧实现摘的是 documentView.superview——那是 NSClipView（NSScrollView 的
+        // 内部裁剪视图），AppKit 会抛 "removeFromSuperview called for NSScrollView
+        // contentView" 异常。事件回调里该异常被 AppKit 吞掉后 select 半途中断：
+        // 侧边栏高亮已切换、新内容从未挂载、旧滚动视图内部被拆坏 → 内容区空白。
+        NSLayoutConstraint.deactivate(detailFitConstraints)
+        detailFitConstraints = []
+        detailScrollView?.removeFromSuperview()
+
         let v = vc.view
         v.translatesAutoresizingMaskIntoConstraints = false
 
@@ -234,21 +244,25 @@ final class SettingsWindowController: NSWindowController {
         scroll.verticalScrollElasticity = .none
         detailColumn.addSubview(scroll)
         scroll.documentView = v
-        currentDetailView = v
+        detailScrollView = scroll
 
         NSLayoutConstraint.activate([
             scroll.topAnchor.constraint(equalTo: detailColumn.topAnchor),
             scroll.leadingAnchor.constraint(equalTo: detailColumn.leadingAnchor),
             scroll.trailingAnchor.constraint(equalTo: detailColumn.trailingAnchor),
             scroll.bottomAnchor.constraint(equalTo: detailColumn.bottomAnchor),
+        ])
 
-            // 只做纵向滚动：宽度始终撑满可视区，高度随内容自然生长
-            //（macOS 无 UIScrollView 式 contentLayoutGuide，用 NSClipView 当锚点）
+        // 只做纵向滚动：宽度始终撑满可视区，高度随内容自然生长
+        //（macOS 无 UIScrollView 式 contentLayoutGuide，用 NSClipView 当锚点）
+        let fit = [
             v.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
             v.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
             v.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
             v.bottomAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.bottomAnchor),
-        ])
+        ]
+        NSLayoutConstraint.activate(fit)
+        detailFitConstraints = fit
     }
 
     // MARK: - 键盘导航
