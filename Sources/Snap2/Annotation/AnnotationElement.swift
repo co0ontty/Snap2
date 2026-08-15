@@ -16,6 +16,12 @@ final class AnnotationElement {
     /// mosaicSource 对应的逻辑（点）尺寸 = 选区点尺寸
     var mosaicSourceSize: NSSize = .zero
 
+    /// 文字专用：整张选区背景的高斯模糊版本（SelectionView 预生成并缓存注入）。
+    /// 标注位置背后常有原文/密集 UI，纯半透明底压不住，模糊后文字可读性大幅提升。
+    var blurSource: CGImage?
+    /// blurSource 对应的逻辑（点）尺寸 = 选区点尺寸
+    var blurSourceSize: NSSize = .zero
+
     init(toolType: AnnotationToolType, color: NSColor, lineWidth: CGFloat) {
         self.toolType = toolType
         self.color = color
@@ -33,6 +39,8 @@ final class AnnotationElement {
         c.font = font
         c.mosaicSource = mosaicSource
         c.mosaicSourceSize = mosaicSourceSize
+        c.blurSource = blurSource
+        c.blurSourceSize = blurSourceSize
         return c
     }
 }

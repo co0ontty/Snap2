@@ -38,6 +38,9 @@ final class SelectionView: NSView {
 
     /// 马赛克源图缓存：key = 块大小（像素，整数化避免浮点 key 抖动），value = pre-pixelated 整图
     private var mosaicCache: [Int: CGImage] = [:]
+    /// 文字磨砂源缓存：整张选区背景的固定半径高斯模糊图。
+    /// 半径与线宽无关，单值即可；captured 变化（重裁/移动选区）时失效。
+    private var blurSourceCache: CGImage?
     /// 复用的 CIContext（开销大，避免每次新建）
     private static let mosaicCIContext = CIContext()
 
@@ -56,6 +59,19 @@ final class SelectionView: NSView {
     // 内嵌文字编辑
     private weak var activeTextField: InlineAnnotationTextField?
     private var activeTextOrigin: NSPoint = .zero
+    /// 编辑框的磨砂背板：画 blurSource 裁剪 + tint，随输入框同步伸缩
+    private var activeTextBackdrop: TextEditingBackdropView?
+    /// 正在重新编辑的已提交文字元素；绘制标注时跳过它（显示交给输入框）。
+    /// nil 表示当前输入框是"新建文字"。
+    private var editingTextElement: AnnotationElement?
+
+    // 拖动已有文字元素
+    private var movingTextElement: AnnotationElement?
+    /// 拖动开始时的元素位置（撤销快照需要回填）
+    private var movingTextOrigin: NSPoint = .zero
+    /// 鼠标按下位置（选区局部坐标）
+    private var movingTextGrabPoint: NSPoint = .zero
+    private var movingTextDidMove: Bool = false
 
     // 拖动钉图
     private var isDraggingPin: Bool = false
@@ -182,6 +198,7 @@ final class SelectionView: NSView {
         capturedImage = image
         capturedCGImage = cgImage
         mosaicCache.removeAll()
+        blurSourceCache = nil
         selectionRect = rect
         mode = .annotating
         if let tool = startTool {
@@ -277,6 +294,15 @@ final class SelectionView: NSView {
         return true
     }
 
+    /// 命中测试：选区局部坐标 p 是否落在某个已提交文字元素的背景矩形内。
+    /// 后创建的优先（叠放时抓最上层）。几何与绘制共用 TextTool.backgroundRect。
+    private func hitTestTextElement(at p: NSPoint) -> AnnotationElement? {
+        for el in elements.reversed() where el.toolType == .text {
+            if TextTool.backgroundRect(for: el).contains(p) { return el }
+        }
+        return nil
+    }
+
     /// 选区左上角的拖动手柄（三横线 ≡）。用户从这里拖出去即新建桌面钉图。
     private func pinHandleRect() -> NSRect? {
         guard mode == .annotating, !isDraggingPin else { return nil }
@@ -342,7 +368,7 @@ final class SelectionView: NSView {
     private func drawAnnotations(in context: CGContext) {
         context.saveGState()
         context.translateBy(x: selectionRect.origin.x, y: selectionRect.origin.y)
-        for el in elements {
+        for el in elements where el !== editingTextElement {
             toolRegistry.tool(for: el.toolType)?.draw(element: el, in: context)
         }
         if let cur = currentElement {
@@ -495,11 +521,19 @@ final class SelectionView: NSView {
 
         // ESC：分级取消
         //   1) 正在拖一个 element（鼠标按下未抬起）→ 仅丢弃当前元素
+        //   1.5) 正在拖动已有文字 → 放回原位
         //   2) 标注模式有历史元素 → 撤销最近一个（等价于 ⌘Z）
         //   3) 否则                → 关掉整次截图
         if event.keyCode == 53 {
             if mode == .annotating, currentElement != nil {
                 currentElement = nil
+                needsDisplay = true
+                return
+            }
+            if mode == .annotating, let el = movingTextElement {
+                el.startPoint = movingTextOrigin
+                el.endPoint = movingTextOrigin
+                movingTextElement = nil
                 needsDisplay = true
                 return
             }
@@ -544,6 +578,7 @@ final class SelectionView: NSView {
             currentTool = tool
             AnnotationPreferences.saveTool(tool)
             toolbarView?.setSelectedTool(tool)
+            window?.invalidateCursorRects(for: self)
             return
         }
 
@@ -581,6 +616,7 @@ final class SelectionView: NSView {
         self.capturedCGImage = cropped.cgImage
         self.capturedImage = NSImage(cgImage: cropped.cgImage, size: cropped.pointSize)
         self.mosaicCache.removeAll()
+        blurSourceCache = nil
         self.mode = .annotating
         self.showAnnotationToolbar()
         self.needsDisplay = true
@@ -628,6 +664,7 @@ final class SelectionView: NSView {
             self.capturedCGImage = cgImage
             self.capturedImage = NSImage(cgImage: cgImage, size: pointSize)
             self.mosaicCache.removeAll()
+            blurSourceCache = nil
             self.mode = .annotating
             self.showAnnotationToolbar()
             self.needsDisplay = true
@@ -698,6 +735,29 @@ final class SelectionView: NSView {
         return baked
     }
 
+    /// 生成/取回文字磨砂源：整张选区背景按固定半径（点级 6）高斯模糊。
+    /// 与 mosaic 同一套策略——预烘焙整图 + 元素持有引用，绘制时 O(1) 裁剪。
+    /// 先 clampedToExtent 再模糊：直接模糊会让图像边缘渗入透明像素，
+    /// 文字贴选区边时背景出现不该有的渐隐。
+    private func ensureBlurSource() -> CGImage? {
+        if let cached = blurSourceCache { return cached }
+        guard let cgSource = capturedCGImage,
+              let pointSize = capturedImage?.size,
+              pointSize.width > 0, pointSize.height > 0 else { return nil }
+
+        let scale = CGFloat(cgSource.width) / pointSize.width
+        let ci = CIImage(cgImage: cgSource)
+        guard let filter = CIFilter(name: "CIGaussianBlur") else { return nil }
+        filter.setValue(ci.clampedToExtent(), forKey: kCIInputImageKey)
+        filter.setValue(6.0 * scale, forKey: kCIInputRadiusKey)
+        guard let output = filter.outputImage?.cropped(to: ci.extent),
+              let baked = Self.mosaicCIContext.createCGImage(output, from: ci.extent) else {
+            return nil
+        }
+        blurSourceCache = baked
+        return baked
+    }
+
     // MARK: - 标注鼠标
 
     private func handleAnnotationMouseDown(p: NSPoint, event: NSEvent) {
@@ -748,6 +808,16 @@ final class SelectionView: NSView {
                             y: p.y - selectionRect.origin.y)
 
         if currentTool == .text {
+            // 命中已有文字 → 进入"拖动/点按重编辑"手势：
+            //   拖动超过阈值 = 移动文字；原地松手 = 重新编辑内容
+            if let hit = hitTestTextElement(at: local) {
+                movingTextElement = hit
+                movingTextOrigin = hit.startPoint
+                movingTextGrabPoint = local
+                movingTextDidMove = false
+                NSCursor.closedHand.set()
+                return
+            }
             promptText(at: local)
             return
         }
@@ -770,6 +840,28 @@ final class SelectionView: NSView {
                 x: p.x - pinDragHandOffset.x,
                 y: p.y - pinDragHandOffset.y
             )
+            needsDisplay = true
+            return
+        }
+
+        if let el = movingTextElement {
+            let local = NSPoint(x: p.x - selectionRect.origin.x,
+                                y: p.y - selectionRect.origin.y)
+            let dx = local.x - movingTextGrabPoint.x
+            let dy = local.y - movingTextGrabPoint.y
+            if !movingTextDidMove, abs(dx) > 2 || abs(dy) > 2 {
+                movingTextDidMove = true
+            }
+            var newPos = NSPoint(x: movingTextOrigin.x + dx, y: movingTextOrigin.y + dy)
+            // 背景矩形（含 padding）钳制在选区内：最终输出只保留选区内容，
+            // 不钳的话文字拖到边缘会被裁掉一半。
+            let size = TextTool.backgroundRect(for: el).size
+            let maxX = max(TextTool.textPadding, selectionRect.width - size.width + TextTool.textPadding)
+            let maxY = max(TextTool.textPadding, selectionRect.height - size.height + TextTool.textPadding)
+            newPos.x = min(max(newPos.x, TextTool.textPadding), maxX)
+            newPos.y = min(max(newPos.y, TextTool.textPadding), maxY)
+            el.startPoint = newPos
+            el.endPoint = newPos
             needsDisplay = true
             return
         }
@@ -805,6 +897,29 @@ final class SelectionView: NSView {
     private func handleAnnotationMouseUp(p: NSPoint) {
         if isDraggingPin {
             commitPinDrag(at: p)
+            return
+        }
+
+        if let el = movingTextElement {
+            movingTextElement = nil
+            window?.invalidateCursorRects(for: self)
+            if movingTextDidMove, el.startPoint != movingTextOrigin {
+                // 补一条"移动前"的撤销快照：undoStack 存深拷贝，这里先把元素
+                // 放回原位 push 再恢复新位置，⌘Z 即可精确回退这次移动。
+                let final = el.startPoint
+                el.startPoint = movingTextOrigin
+                el.endPoint = movingTextOrigin
+                pushUndoSnapshot()
+                el.startPoint = final
+                el.endPoint = final
+                // 选区若在元素创建后被调整过，顺带换成当前磨砂源（缓存命中，零开销）
+                el.blurSource = ensureBlurSource()
+                el.blurSourceSize = capturedImage?.size ?? .zero
+            } else {
+                // 没拖动 = 点按已有文字 → 原地重新编辑
+                promptText(at: el.startPoint, editing: el)
+            }
+            needsDisplay = true
             return
         }
 
@@ -850,6 +965,7 @@ final class SelectionView: NSView {
             capturedCGImage = cropped.cgImage
             capturedImage = NSImage(cgImage: cropped.cgImage, size: cropped.pointSize)
             mosaicCache.removeAll()
+            blurSourceCache = nil
         }
         // editPin 路径（frozenCGImage == nil）此处不重裁——capturedImage 在 draw() 里按
         // selectionRect 跟随，move 视觉一致；resize 控制点已被 drawAnnotationResizeHandles
@@ -908,47 +1024,95 @@ final class SelectionView: NSView {
 
     /// 在选区局部坐标 `point` 处弹出内嵌文字输入框；Enter 提交，Esc 取消，失焦自动提交。
     /// 不再使用 NSAlert（在 .screenSaver 层级的 overlay 上方会被遮挡导致死锁）。
-    private func promptText(at point: NSPoint) {
-        finishActiveText(commit: false)
+    /// - Parameter editing: 传入已有文字元素则为"重新编辑"：预填内容/字体/颜色，
+    ///   提交时原地更新该元素而非新建；编辑期间该元素的绘制由输入框接管（drawAnnotations 跳过）。
+    private func promptText(at point: NSPoint, editing element: AnnotationElement? = nil) {
+        // 兜底提交上一个仍在编辑的输入框（正常路径下失焦时已经提交过，这里多为 no-op）。
+        // 用 commit: true——万一真有没走失焦路径的残留输入，宁可多留字也不能吞字。
+        finishActiveText(commit: true)
+        editingTextElement = element
 
-        let fontSize = max(currentLineWidth * 6, 14)
-        let font = NSFont.systemFont(ofSize: fontSize)
+        let font = element?.font ?? NSFont.systemFont(ofSize: max(currentLineWidth * 6, 14))
+        let color = element?.color ?? currentColor
+        let pad = TextTool.textPadding
         let lineHeight = ceil(font.boundingRectForFont.height)
-        let pad: CGFloat = 6  // 与 TextTool.draw 的 textPadding 一致
+
+        // 落点钳制（仅新建）：文字块从点击处向上生长，贴近上/右缘时往回收一点，
+        // 避免提交后文字顶出选区被输出裁掉。重编辑沿用元素自身位置（拖动时已钳过）。
+        var anchor = point
+        if element == nil {
+            anchor.x = min(max(anchor.x, pad + 2), max(pad + 2, selectionRect.width - 100))
+            anchor.y = min(max(anchor.y, pad + 2), max(pad + 2, selectionRect.height - lineHeight - pad))
+        }
 
         // 选区局部坐标 → 视图坐标
-        let viewX = selectionRect.origin.x + point.x - pad
-        let viewY = selectionRect.origin.y + point.y - pad
+        let viewX = selectionRect.origin.x + anchor.x - pad
+        let viewY = selectionRect.origin.y + anchor.y - pad
 
         let tf = InlineAnnotationTextField(frame: NSRect(
             x: viewX, y: viewY,
             width: 220, height: lineHeight + pad * 2
         ))
         tf.font = font
-        tf.textColor = currentColor
-        tf.backgroundColor = NSColor.black.withAlphaComponent(0.2)
-        tf.drawsBackground = true
+        tf.textColor = color
+        // 背景交给磨砂背板，输入时与提交后的 TextTool 观感一致
+        tf.drawsBackground = false
         tf.isBezeled = false
         tf.isBordered = false
         tf.placeholderString = "输入文字"
         tf.focusRingType = .none
         tf.delegate = self
-        tf.wantsLayer = true
-        tf.layer?.cornerRadius = 4
-        tf.layer?.masksToBounds = true
+
+        // 磨砂背板：从整选区模糊源裁出输入框背后的区域
+        let backdrop = TextEditingBackdropView(frame: tf.frame)
+        let localRect = NSRect(
+            x: tf.frame.minX - selectionRect.origin.x,
+            y: tf.frame.minY - selectionRect.origin.y,
+            width: tf.frame.width, height: tf.frame.height
+        )
+        if let blur = ensureBlurSource(), let size = capturedImage?.size {
+            backdrop.blurredCrop = TextTool.cropSource(blur, pointSize: size, to: localRect)
+        }
 
         activeTextField = tf
-        activeTextOrigin = point
+        activeTextOrigin = anchor
+        activeTextBackdrop = backdrop
+        addSubview(backdrop)
         addSubview(tf)
+        if let text = element?.text { tf.stringValue = text }
         window?.makeFirstResponder(tf)
+        growActiveTextField(toFit: tf.stringValue)
         needsDisplay = true
+    }
+
+    /// 输入框宽度跟随内容伸缩（下限 140、不越出选区右缘），
+    /// 让编辑时看到的宽度与提交后的文字背景矩形一致。
+    private func growActiveTextField(toFit text: String) {
+        guard let tf = activeTextField, let font = tf.font else { return }
+        let pad = TextTool.textPadding
+        let textWidth = (text as NSString).size(withAttributes: [.font: font]).width
+        let desired = textWidth + pad * 2 + 12  // 光标与滚动余量
+        let minWidth: CGFloat = 140
+        let maxWidth = max(minWidth, selectionRect.maxX - tf.frame.minX - pad)
+        let width = min(max(desired, minWidth), maxWidth).rounded()
+        let r = tf.frame
+        if abs(r.width - width) > 0.5 {
+            tf.frame = NSRect(origin: r.origin, size: NSSize(width: width, height: r.height))
+        }
+        if let bd = activeTextBackdrop, bd.frame != tf.frame {
+            bd.frame = tf.frame
+        }
     }
 
     private func finishActiveText(commit: Bool) {
         guard let tf = activeTextField else { return }
         let text = tf.stringValue
         let origin = activeTextOrigin
+        let editing = editingTextElement
         activeTextField = nil
+        activeTextBackdrop?.removeFromSuperview()
+        activeTextBackdrop = nil
+        editingTextElement = nil
         tf.delegate = nil
         tf.removeFromSuperview()
         // 仅在选区视图仍在响应链时回收 first responder
@@ -956,16 +1120,33 @@ final class SelectionView: NSView {
             window?.makeFirstResponder(self)
         }
 
-        if commit, !text.isEmpty {
+        if let editing = editing {
+            // 重新编辑路径：原地更新；清空文本提交 = 删除该文字；取消 = 元素原样保留
+            if commit {
+                if text.isEmpty {
+                    pushUndoSnapshot()
+                    elements.removeAll { $0 === editing }
+                } else if text != editing.text {
+                    pushUndoSnapshot()
+                    editing.text = text
+                    // 选区可能在元素创建后被调整过，重注入当前磨砂源
+                    editing.blurSource = ensureBlurSource()
+                    editing.blurSourceSize = capturedImage?.size ?? .zero
+                }
+            }
+        } else if commit, !text.isEmpty {
             let el = AnnotationElement(toolType: .text, color: currentColor, lineWidth: currentLineWidth)
             el.startPoint = origin
             el.endPoint = origin
             el.text = text
             el.font = NSFont.systemFont(ofSize: max(currentLineWidth * 6, 14))
+            el.blurSource = ensureBlurSource()
+            el.blurSourceSize = capturedImage?.size ?? .zero
             pushUndoSnapshot()
             elements.append(el)
         }
         needsDisplay = true
+        window?.invalidateCursorRects(for: self)
     }
 
     // MARK: - 操作
@@ -1306,6 +1487,10 @@ final class SelectionView: NSView {
             tf.removeFromSuperview()
             activeTextField = nil
         }
+        activeTextBackdrop?.removeFromSuperview()
+        activeTextBackdrop = nil
+        editingTextElement = nil
+        movingTextElement = nil
         removeToolbar()
         hideSizeBadge()
     }
@@ -1338,7 +1523,20 @@ final class SelectionView: NSView {
                               cursor: SelectionHandles.cursor(forHandle: i))
             }
 
-            // 3. 外侧 move ring：openHand 提示可拖动整个选区
+            // 3. 文字工具：已有文字块 → openHand（可拖动，点按重编辑）
+            if currentTool == .text {
+                for el in elements where el.toolType == .text && el !== editingTextElement {
+                    let r = TextTool.backgroundRect(for: el)
+                    let viewRect = NSRect(
+                        x: selectionRect.origin.x + r.origin.x,
+                        y: selectionRect.origin.y + r.origin.y,
+                        width: r.width, height: r.height
+                    )
+                    addCursorRect(viewRect, cursor: .openHand)
+                }
+            }
+
+            // 4. 外侧 move ring：openHand 提示可拖动整个选区
             if selectionRect.width > 0, selectionRect.height > 0 {
                 let outer = selectionRect.insetBy(dx: -annotationMoveRingWidth, dy: -annotationMoveRingWidth)
                 // ring 形区域用 4 条矩形拼出来（顶/底/左/右）
@@ -1355,7 +1553,7 @@ final class SelectionView: NSView {
                 }
             }
 
-            // 4. 选区内部：绘制 crosshair（兜底）
+            // 5. 选区内部：绘制 crosshair（兜底）
             addCursorRect(selectionRect, cursor: .crosshair)
         }
     }
@@ -1367,6 +1565,8 @@ extension SelectionView: GlassToolbarDelegate {
     func toolbarDidPickTool(_ tool: AnnotationToolType) {
         currentTool = tool
         AnnotationPreferences.saveTool(tool)
+        // 文字块的 openHand 光标矩形只在文字工具下注册，切工具需重算
+        window?.invalidateCursorRects(for: self)
     }
     func toolbarDidPickColor(_ color: NSColor) {
         currentColor = color
@@ -1419,6 +1619,31 @@ extension SelectionView: GlassToolbarDelegate {
 /// 标注文字输入框。继承 NSTextField 仅为给类型加身份标识，便于在 SelectionView 引用。
 final class InlineAnnotationTextField: NSTextField {}
 
+/// 文字编辑框的磨砂背板：绘制预模糊裁剪 + 半透明 tint。
+/// 常量全部取自 TextTool，保证"编辑时看到的"与"提交后画出的"是同一套观感。
+final class TextEditingBackdropView: NSView {
+    /// 输入框背后区域的模糊裁剪（由 SelectionView 从整选区模糊源裁出）；nil 时只剩 tint
+    var blurredCrop: CGImage?
+
+    override func draw(_ dirtyRect: NSRect) {
+        guard let context = NSGraphicsContext.current?.cgContext else { return }
+        context.saveGState()
+        let path = CGPath(roundedRect: bounds,
+                          cornerWidth: TextTool.cornerRadius,
+                          cornerHeight: TextTool.cornerRadius,
+                          transform: nil)
+        context.addPath(path)
+        context.clip()
+        if let crop = blurredCrop {
+            context.interpolationQuality = .none
+            context.draw(crop, in: bounds)
+        }
+        NSColor.black.withAlphaComponent(TextTool.backgroundAlpha).setFill()
+        context.fill(bounds)
+        context.restoreGState()
+    }
+}
+
 extension SelectionView: NSTextFieldDelegate {
     /// 拦截 Esc / Enter，分别走取消与提交。
     func control(_ control: NSControl, textView: NSTextView, doCommandBy commandSelector: Selector) -> Bool {
@@ -1437,5 +1662,11 @@ extension SelectionView: NSTextFieldDelegate {
     /// 失焦自动提交（点击工具栏切工具、点别的位置等）。
     func controlTextDidEndEditing(_ obj: Notification) {
         finishActiveText(commit: true)
+    }
+
+    /// 输入内容变化 → 输入框与背板同步伸缩。
+    func controlTextDidChange(_ obj: Notification) {
+        guard let tf = obj.object as? InlineAnnotationTextField, tf === activeTextField else { return }
+        growActiveTextField(toFit: tf.stringValue)
     }
 }
