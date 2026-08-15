@@ -2,6 +2,7 @@
 // 管理菜单栏状态栏图标和下拉菜单
 
 import AppKit
+import Carbon.HIToolbox
 
 class StatusBarController {
 
@@ -108,32 +109,30 @@ class StatusBarController {
         let menu = NSMenu()
         menu.autoenablesItems = false
 
-        // 区域截图（显示当前快捷键）
+        // 区域截图（keyEquivalent 显示当前快捷键）
         let manager = HotkeyManager.shared
-        let hotkeyDisplay = KeyCodeMapping.displayString(
-            keyCode: manager.currentKeyCode,
-            carbonModifiers: manager.currentModifiers
-        )
 
         captureItem = NSMenuItem(
-            title: "区域截图    \(hotkeyDisplay)",
+            title: "区域截图",
             action: #selector(captureRegion),
             keyEquivalent: ""
         )
+        applyKeyEquivalent(to: captureItem,
+                           keyCode: manager.currentKeyCode,
+                           carbonModifiers: manager.currentModifiers)
         captureItem.target = self
         captureItem.image = NSImage(systemSymbolName: "crop", accessibilityDescription: nil)
         menu.addItem(captureItem)
 
         // 区域录屏
-        let recordHotkeyDisplay = KeyCodeMapping.displayString(
-            keyCode: manager.keyCode(for: .record),
-            carbonModifiers: manager.modifiers(for: .record)
-        )
         recordItem = NSMenuItem(
-            title: "区域录屏    \(recordHotkeyDisplay)",
+            title: "区域录屏",
             action: #selector(recordRegion),
             keyEquivalent: ""
         )
+        applyKeyEquivalent(to: recordItem,
+                           keyCode: manager.keyCode(for: .record),
+                           carbonModifiers: manager.modifiers(for: .record))
         recordItem.target = self
         recordItem.image = NSImage(systemSymbolName: "record.circle", accessibilityDescription: nil)
         menu.addItem(recordItem)
@@ -206,8 +205,8 @@ class StatusBarController {
     }
 
     @objc private func showAbout() {
-        NSApp.activate(ignoringOtherApps: true)
-        NSApp.orderFrontStandardAboutPanel(nil)
+        // 与设置窗「关于」页统一为一套信息，不再弹系统 about 面板
+        settingsWindowController.showAboutPage()
     }
 
     @objc private func quitApp() {
@@ -216,19 +215,26 @@ class StatusBarController {
 
     // MARK: - 更新快捷键显示
 
+    /// 把 Carbon 键位写进菜单项的 keyEquivalent，让系统在标题右侧原生渲染快捷键。
+    private func applyKeyEquivalent(to item: NSMenuItem, keyCode: UInt32, carbonModifiers: UInt32) {
+        item.keyEquivalent = KeyCodeMapping.stringForKeyCode(keyCode).lowercased()
+        // Carbon 修饰键常量在 Swift 里是 Int，先统一转 UInt32 再按位与。
+        var flags: NSEvent.ModifierFlags = []
+        if carbonModifiers & UInt32(cmdKey) != 0 { flags.insert(.command) }
+        if carbonModifiers & UInt32(shiftKey) != 0 { flags.insert(.shift) }
+        if carbonModifiers & UInt32(optionKey) != 0 { flags.insert(.option) }
+        if carbonModifiers & UInt32(controlKey) != 0 { flags.insert(.control) }
+        item.keyEquivalentModifierMask = flags
+    }
+
     @objc private func updateCaptureShortcutDisplay() {
         let manager = HotkeyManager.shared
-        let hotkeyDisplay = KeyCodeMapping.displayString(
-            keyCode: manager.currentKeyCode,
-            carbonModifiers: manager.currentModifiers
-        )
-        captureItem?.title = "区域截图    \(hotkeyDisplay)"
-
-        let recordDisplay = KeyCodeMapping.displayString(
-            keyCode: manager.keyCode(for: .record),
-            carbonModifiers: manager.modifiers(for: .record)
-        )
-        recordItem?.title = "区域录屏    \(recordDisplay)"
+        applyKeyEquivalent(to: captureItem!,
+                           keyCode: manager.currentKeyCode,
+                           carbonModifiers: manager.currentModifiers)
+        applyKeyEquivalent(to: recordItem!,
+                           keyCode: manager.keyCode(for: .record),
+                           carbonModifiers: manager.modifiers(for: .record))
     }
 
     // MARK: - 更新检查

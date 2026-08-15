@@ -31,10 +31,12 @@ Agent 在任务执行过程中发现的条目应遵循以下格式：
 
 ## 条目
 
-[Swift 工具链可用性]
-- Date: 2026-05-30
-- Context: Agent 在执行界面布局优化后的构建验证时发现
-- Category: 环境配置
+[Swift 工具链与 SDK 匹配]
+- Date: 2026-08-15
+- Context: Agent 在执行界面扁平化重构与构建验证时发现（更正 2026-05-30 的旧记录）
+- Category: 构建方法
 - Instructions:
-  - 当前工作区运行环境未安装 `swift` 命令，无法在此环境直接执行 `swift build`。
-  - Swift 相关改动需要在具备 Swift 工具链的机器或 CI 环境中完成最终构建验证。
+  - 本机 swift 工具链可用（Xcode 6.3.3，`swift build` 直接可用）。旧记录"无 swift 命令"已过时。
+  - `xcrun --show-sdk-path` 会解析到 CommandLineTools 的 SDK（Swift 6.4 构建），与 PATH 里的 Xcode 6.3.3 编译器不匹配，直接 `make app` 报 "this SDK is not supported by the compiler"。
+  - Makefile 已内置错配防护（编译器来自 Xcode 且 SDK 落在 CLT 时自动切 Xcode 平台 SDK）；必要时也可显式 `make app SDK=/Applications/Xcode.app/Contents/Developer/Platforms/MacOSX.platform/Developer/SDKs/MacOSX.sdk`。
+  - HUD 界面验证不需要模拟鼠标：`./build_output/Snap2 --demo-annotating` 直接进入标注模式；`--demo-capture` / `--demo-recording` 走热键同款通知路径。截图用 `screencapture -x`。

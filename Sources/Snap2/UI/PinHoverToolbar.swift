@@ -25,7 +25,7 @@ final class PinHoverToolbar {
         let size = NSSize(width: PinHoverToolbarView.intrinsicWidth,
                           height: PinHoverToolbarView.toolbarHeight)
         self.panel = GlassPanel(size: size,
-                                cornerRadius: 14,
+                                cornerRadius: Glass.radiusCard,
                                 level: owner.level)
         self.toolbarView = PinHoverToolbarView(frame: NSRect(origin: .zero, size: size))
 
@@ -250,15 +250,7 @@ private final class PinHoverToolbarView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let area = trackingArea { removeTrackingArea(area) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingArea = area
+        rebuildHoverTrackingArea(existing: &trackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) {

@@ -51,8 +51,7 @@ final class SelectionView: NSView {
     // 浮窗
     private var toolbarPanel: GlassPanel?
     private var toolbarView: GlassToolbar?
-    private var sizeBadgePanel: GlassPanel?
-    private var sizeBadgeLabel: NSTextField?
+    private let sizeBadge = SizeBadge()
 
     // 内嵌文字编辑
     private weak var activeTextField: InlineAnnotationTextField?
@@ -204,29 +203,13 @@ final class SelectionView: NSView {
         context.restoreGState()
 
         // 8 个角/边手柄
-        context.saveGState()
-        for rect in handleRects {
-            // 圆形手柄：白底 + 暗色内描边 + 微阴影感（用 2px stroke 形成质感）
-            let path = CGPath(ellipseIn: rect, transform: nil)
-            context.setShadow(offset: CGSize(width: 0, height: -1), blur: 2,
-                              color: NSColor.black.withAlphaComponent(0.4).cgColor)
-            context.addPath(path)
-            NSColor.white.setFill()
-            context.fillPath()
-            context.setShadow(offset: .zero, blur: 0, color: nil)
-
-            context.addPath(path)
-            NSColor(white: 0.0, alpha: 0.25).setStroke()
-            context.setLineWidth(1.0)
-            context.strokePath()
-        }
-        context.restoreGState()
+        SelectionHandles.drawSelecting(in: context, rects: handleRects)
     }
 
     private func drawAnnotationFrame(in context: CGContext) {
         // 标注模式下，选区只画一道发光的强调色边框
         context.saveGState()
-        ClaudeTheme.accent.withAlphaComponent(0.85).setStroke()
+        NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
         context.setLineWidth(1.5)
         context.stroke(selectionRect)
         context.restoreGState()
@@ -254,7 +237,7 @@ final class SelectionView: NSView {
             context.setShadow(offset: .zero, blur: 0, color: nil)
 
             context.addPath(path)
-            ClaudeTheme.accent.withAlphaComponent(0.85).setStroke()
+            NSColor.controlAccentColor.withAlphaComponent(0.85).setStroke()
             context.setLineWidth(1.0)
             context.strokePath()
         }
@@ -268,19 +251,7 @@ final class SelectionView: NSView {
         guard mode == .annotating, frozenCGImage != nil,
               selectionRect.width > annotationHandleSize * 3,
               selectionRect.height > annotationHandleSize * 3 else { return [] }
-        let r = selectionRect
-        let s = annotationHandleSize
-        let half = s / 2
-        return [
-            NSRect(x: r.minX - half, y: r.maxY - half, width: s, height: s), // 0 TL
-            NSRect(x: r.maxX - half, y: r.maxY - half, width: s, height: s), // 1 TR
-            NSRect(x: r.maxX - half, y: r.minY - half, width: s, height: s), // 2 BR
-            NSRect(x: r.minX - half, y: r.minY - half, width: s, height: s), // 3 BL
-            NSRect(x: r.midX - half, y: r.maxY - half, width: s, height: s), // 4 T
-            NSRect(x: r.maxX - half, y: r.midY - half, width: s, height: s), // 5 R
-            NSRect(x: r.midX - half, y: r.minY - half, width: s, height: s), // 6 B
-            NSRect(x: r.minX - half, y: r.midY - half, width: s, height: s), // 7 L
-        ]
+        return SelectionHandles.rects(for: selectionRect, handleSize: annotationHandleSize)
     }
 
     /// 命中测试：返回点击到了哪个 resize 控制点（0..7），否则返回 nil。
@@ -382,24 +353,9 @@ final class SelectionView: NSView {
 
     // MARK: - 手柄
 
-    private let handleSize: CGFloat = 9
-    private let handleHitPad: CGFloat = 6
-
     private var handleRects: [NSRect] {
-        guard mode == .selecting, selectionRect.width > 0, selectionRect.height > 0 else { return [] }
-        let r = selectionRect
-        let s = handleSize
-        let half = s / 2
-        return [
-            NSRect(x: r.minX - half, y: r.maxY - half, width: s, height: s), // 0 TL
-            NSRect(x: r.maxX - half, y: r.maxY - half, width: s, height: s), // 1 TR
-            NSRect(x: r.maxX - half, y: r.minY - half, width: s, height: s), // 2 BR
-            NSRect(x: r.minX - half, y: r.minY - half, width: s, height: s), // 3 BL
-            NSRect(x: r.midX - half, y: r.maxY - half, width: s, height: s), // 4 T
-            NSRect(x: r.maxX - half, y: r.midY - half, width: s, height: s), // 5 R
-            NSRect(x: r.midX - half, y: r.minY - half, width: s, height: s), // 6 B
-            NSRect(x: r.minX - half, y: r.midY - half, width: s, height: s), // 7 L
-        ]
+        guard mode == .selecting else { return [] }
+        return SelectionHandles.rects(for: selectionRect)
     }
 
     private enum DragKind { case create, move, resize(Int) }
@@ -418,13 +374,11 @@ final class SelectionView: NSView {
         }
 
         // 检测命中手柄
-        for (i, h) in handleRects.enumerated() {
-            if h.insetBy(dx: -handleHitPad, dy: -handleHitPad).contains(p) {
-                dragKind = .resize(i)
-                resizeAnchor = anchorForHandle(i)
-                isAdjusting = true
-                return
-            }
+        if let i = SelectionHandles.hitIndex(at: p, in: selectionRect) {
+            dragKind = .resize(i)
+            resizeAnchor = anchorForHandle(i)
+            isAdjusting = true
+            return
         }
 
         // 选区内：移动
@@ -507,38 +461,12 @@ final class SelectionView: NSView {
     }
 
     private func applyResize(handleIndex: Int, point p: NSPoint) {
-        let r = selectionRect
-        switch handleIndex {
-        case 0...3: // 角
-            selectionRect = NSRect(
-                x: min(resizeAnchor.x, p.x), y: min(resizeAnchor.y, p.y),
-                width: abs(p.x - resizeAnchor.x), height: abs(p.y - resizeAnchor.y)
-            )
-        case 4: // top
-            let y = min(r.minY, p.y)
-            selectionRect = NSRect(x: r.minX, y: y, width: r.width, height: abs(p.y - r.minY))
-        case 5: // right
-            let x = min(r.minX, p.x)
-            selectionRect = NSRect(x: x, y: r.minY, width: abs(p.x - r.minX), height: r.height)
-        case 6: // bottom
-            let y = min(p.y, r.maxY)
-            selectionRect = NSRect(x: r.minX, y: y, width: r.width, height: abs(r.maxY - p.y))
-        case 7: // left
-            let x = min(p.x, r.maxX)
-            selectionRect = NSRect(x: x, y: r.minY, width: abs(r.maxX - p.x), height: r.height)
-        default: break
-        }
+        selectionRect = SelectionHandles.resizedSelection(handle: handleIndex, to: p,
+                                                          from: selectionRect, anchor: resizeAnchor)
     }
 
     private func anchorForHandle(_ i: Int) -> NSPoint {
-        let r = selectionRect
-        switch i {
-        case 0: return NSPoint(x: r.maxX, y: r.minY)
-        case 1: return NSPoint(x: r.minX, y: r.minY)
-        case 2: return NSPoint(x: r.minX, y: r.maxY)
-        case 3: return NSPoint(x: r.maxX, y: r.maxY)
-        default: return r.origin
-        }
+        SelectionHandles.anchor(i, of: selectionRect)
     }
 
     // MARK: - 键盘
@@ -1300,23 +1228,13 @@ final class SelectionView: NSView {
         ])
 
         let target = toolbarTargetOrigin(width: panel.frame.width)
-        // 入场起点：从下方 16px + 透明
-        panel.setFrameOrigin(NSPoint(x: target.x, y: target.y - 16))
-        panel.alphaValue = 0
-
+        // 先入场（alpha 0 起步）再挂子窗口，避免在旧 frame 处闪一帧
+        PanelFX.animateIn(panel: panel, to: target, rise: 16, duration: 0.22)
         if let parent = window {
             parent.addChildWindow(panel, ordered: .above)
         }
-        panel.orderFront(nil)
         toolbarPanel = panel
         toolbarView = toolbar
-
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.22
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = 1.0
-            panel.animator().setFrameOrigin(target)
-        }
     }
 
     /// 工具栏目标原点：贴选区下沿外侧；放不下则吸附到选区内部底缘。
@@ -1365,65 +1283,19 @@ final class SelectionView: NSView {
     // MARK: - 玻璃尺寸徽章
 
     private func showSizeBadge() {
-        if sizeBadgePanel != nil { return }
-        let panel = GlassPanel(size: NSSize(width: 110, height: 28),
-                               cornerRadius: Glass.radiusBadge)
-        let label = NSTextField(labelWithString: "")
-        label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
-        label.textColor = .white
-        label.backgroundColor = .clear
-        label.isBezeled = false
-        label.isEditable = false
-        label.alignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        panel.contentBox.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: panel.contentBox.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: panel.contentBox.centerYAnchor),
-        ])
-
-        if let parent = window {
-            parent.addChildWindow(panel, ordered: .above)
-        }
-        panel.orderFront(nil)
-        sizeBadgePanel = panel
-        sizeBadgeLabel = label
+        sizeBadge.show(attachedTo: window)
     }
 
     private func updateSizeBadge() {
-        guard let panel = sizeBadgePanel, let label = sizeBadgeLabel,
-              selectionRect.width > 0, selectionRect.height > 0,
-              let pw = window else { return }
-
+        guard selectionRect.width > 0, selectionRect.height > 0, let pw = window else { return }
         let scale = pw.screen?.backingScaleFactor ?? 1.0
         // 数值是像素（× backingScale），加 px 后缀避免与"点"单位混淆。
         let text = " \(Int(selectionRect.width * scale)) × \(Int(selectionRect.height * scale)) px "
-        label.stringValue = text
-        label.sizeToFit()
-
-        let w = max(110, ceil(label.frame.width) + 24)
-        panel.resize(to: NSSize(width: w, height: 28))
-
-        // 位置：选区上方居中；放不下放下面；最后再钳制到屏幕可视区
-        let so = pw.frame.origin
-        var x = so.x + selectionRect.midX - w / 2
-        var y = so.y + selectionRect.maxY + 8
-        let screenFrame = pw.screen?.frame ?? pw.frame
-        if y + 28 > so.y + screenFrame.height - 8 {
-            y = so.y + selectionRect.minY - 28 - 8
-        }
-        x = max(so.x + 8, min(x, so.x + screenFrame.width - w - 8))
-        y = max(so.y + 8, min(y, so.y + screenFrame.height - 28 - 8))
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        sizeBadge.update(text: text, relativeTo: selectionRect, in: pw)
     }
 
     private func hideSizeBadge() {
-        if let panel = sizeBadgePanel {
-            panel.parent?.removeChildWindow(panel)
-            panel.orderOut(nil)
-        }
-        sizeBadgePanel = nil
-        sizeBadgeLabel = nil
+        sizeBadge.hide()
     }
 
     // MARK: - 关闭清理
@@ -1444,13 +1316,9 @@ final class SelectionView: NSView {
         discardCursorRects()
         if mode == .selecting {
             if selectionRect.width > 0, selectionRect.height > 0 {
-                let cursors: [NSCursor] = [
-                    .resizeUpDown, .resizeUpDown, .resizeUpDown, .resizeUpDown,
-                    .resizeUpDown, .resizeLeftRight, .resizeUpDown, .resizeLeftRight
-                ]
                 for (i, h) in handleRects.enumerated() {
-                    addCursorRect(h.insetBy(dx: -handleHitPad, dy: -handleHitPad),
-                                  cursor: cursors[i])
+                    addCursorRect(h.insetBy(dx: -SelectionHandles.hitPad, dy: -SelectionHandles.hitPad),
+                                  cursor: SelectionHandles.cursor(forHandle: i))
                 }
                 addCursorRect(selectionRect, cursor: .openHand)
             }
@@ -1465,13 +1333,9 @@ final class SelectionView: NSView {
             }
 
             // 2. resize 控制点：用方向感更明确的 resize 光标盖到圆点 hit-pad 区域
-            let resizeCursors: [NSCursor] = [
-                .resizeUpDown, .resizeUpDown, .resizeUpDown, .resizeUpDown,  // 4 角统一用上下，AppKit 没有公开斜向光标
-                .resizeUpDown, .resizeLeftRight, .resizeUpDown, .resizeLeftRight  // T R B L
-            ]
             for (i, h) in annotationResizeHandleRects.enumerated() {
                 addCursorRect(h.insetBy(dx: -annotationHandleHitPad, dy: -annotationHandleHitPad),
-                              cursor: resizeCursors[i])
+                              cursor: SelectionHandles.cursor(forHandle: i))
             }
 
             // 3. 外侧 move ring：openHand 提示可拖动整个选区

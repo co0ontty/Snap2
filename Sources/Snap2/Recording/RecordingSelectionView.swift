@@ -34,13 +34,10 @@ final class RecordingSelectionView: NSView {
     private var moveOffset: NSPoint = .zero
     private var resizeAnchor: NSPoint = .zero
 
-    private let handleSize: CGFloat = 9
-    private let handleHitPad: CGFloat = 6
     private let moveRingWidth: CGFloat = 12
 
     private var confirmPanel: GlassPanel?
-    private var sizeBadgePanel: GlassPanel?
-    private var sizeBadgeLabel: NSTextField?
+    private let sizeBadge = SizeBadge()
 
     // MARK: - 视图设置
 
@@ -112,7 +109,10 @@ final class RecordingSelectionView: NSView {
 
         context.saveGState()
         // 圆角红底
-        let path = CGPath(roundedRect: badgeRect, cornerWidth: 8, cornerHeight: 8, transform: nil)
+        let path = CGPath(roundedRect: badgeRect,
+                          cornerWidth: Glass.radiusBadge,
+                          cornerHeight: Glass.radiusBadge,
+                          transform: nil)
         context.addPath(path)
         NSColor.systemRed.withAlphaComponent(0.92).setFill()
         context.fillPath()
@@ -144,53 +144,17 @@ final class RecordingSelectionView: NSView {
     }
 
     private func drawHandles(in context: CGContext) {
-        guard !isAdjusting || true else { return }
-        context.saveGState()
-        for rect in handleRects {
-            let path = CGPath(ellipseIn: rect, transform: nil)
-            context.setShadow(offset: CGSize(width: 0, height: -1), blur: 2,
-                              color: NSColor.black.withAlphaComponent(0.4).cgColor)
-            context.addPath(path)
-            NSColor.white.setFill()
-            context.fillPath()
-            context.setShadow(offset: .zero, blur: 0, color: nil)
-
-            context.addPath(path)
-            NSColor(white: 0.0, alpha: 0.25).setStroke()
-            context.setLineWidth(1.0)
-            context.strokePath()
-        }
-        context.restoreGState()
+        SelectionHandles.drawSelecting(in: context, rects: handleRects)
     }
 
     // MARK: - Handles
 
     private var handleRects: [NSRect] {
-        guard selectionRect.width > 0, selectionRect.height > 0 else { return [] }
-        let r = selectionRect
-        let s = handleSize
-        let half = s / 2
-        return [
-            NSRect(x: r.minX - half, y: r.maxY - half, width: s, height: s), // 0 TL
-            NSRect(x: r.maxX - half, y: r.maxY - half, width: s, height: s), // 1 TR
-            NSRect(x: r.maxX - half, y: r.minY - half, width: s, height: s), // 2 BR
-            NSRect(x: r.minX - half, y: r.minY - half, width: s, height: s), // 3 BL
-            NSRect(x: r.midX - half, y: r.maxY - half, width: s, height: s), // 4 T
-            NSRect(x: r.maxX - half, y: r.midY - half, width: s, height: s), // 5 R
-            NSRect(x: r.midX - half, y: r.minY - half, width: s, height: s), // 6 B
-            NSRect(x: r.minX - half, y: r.midY - half, width: s, height: s), // 7 L
-        ]
+        SelectionHandles.rects(for: selectionRect)
     }
 
     private func anchorForHandle(_ i: Int) -> NSPoint {
-        let r = selectionRect
-        switch i {
-        case 0: return NSPoint(x: r.maxX, y: r.minY)
-        case 1: return NSPoint(x: r.minX, y: r.minY)
-        case 2: return NSPoint(x: r.minX, y: r.maxY)
-        case 3: return NSPoint(x: r.maxX, y: r.maxY)
-        default: return r.origin
-        }
+        SelectionHandles.anchor(i, of: selectionRect)
     }
 
     // MARK: - 鼠标事件
@@ -199,16 +163,14 @@ final class RecordingSelectionView: NSView {
         let p = convert(event.locationInWindow, from: nil)
 
         // 命中手柄 → resize
-        for (i, h) in handleRects.enumerated() {
-            if h.insetBy(dx: -handleHitPad, dy: -handleHitPad).contains(p) {
-                dragKind = .resize(i)
-                resizeAnchor = anchorForHandle(i)
-                isAdjusting = true
-                hideConfirmToolbar()  // 调整时先把确认条收掉，松手再回来
-                showSizeBadge()
-                updateSizeBadge()
-                return
-            }
+        if let i = SelectionHandles.hitIndex(at: p, in: selectionRect) {
+            dragKind = .resize(i)
+            resizeAnchor = anchorForHandle(i)
+            isAdjusting = true
+            hideConfirmToolbar()  // 调整时先把确认条收掉，松手再回来
+            showSizeBadge()
+            updateSizeBadge()
+            return
         }
         // 选区内 → move
         if selectionRect.width > 0, selectionRect.height > 0, selectionRect.contains(p) {
@@ -282,27 +244,8 @@ final class RecordingSelectionView: NSView {
     }
 
     private func applyResize(handleIndex i: Int, point p: NSPoint) {
-        let r = selectionRect
-        switch i {
-        case 0...3:
-            selectionRect = NSRect(
-                x: min(resizeAnchor.x, p.x), y: min(resizeAnchor.y, p.y),
-                width: abs(p.x - resizeAnchor.x), height: abs(p.y - resizeAnchor.y)
-            )
-        case 4:
-            let y = min(r.minY, p.y)
-            selectionRect = NSRect(x: r.minX, y: y, width: r.width, height: abs(p.y - r.minY))
-        case 5:
-            let x = min(r.minX, p.x)
-            selectionRect = NSRect(x: x, y: r.minY, width: abs(p.x - r.minX), height: r.height)
-        case 6:
-            let y = min(p.y, r.maxY)
-            selectionRect = NSRect(x: r.minX, y: y, width: r.width, height: abs(r.maxY - p.y))
-        case 7:
-            let x = min(p.x, r.maxX)
-            selectionRect = NSRect(x: x, y: r.minY, width: abs(r.maxX - p.x), height: r.height)
-        default: break
-        }
+        selectionRect = SelectionHandles.resizedSelection(handle: i, to: p,
+                                                          from: selectionRect, anchor: resizeAnchor)
     }
 
     private var hasSelection: Bool {
@@ -350,7 +293,7 @@ final class RecordingSelectionView: NSView {
         let width: CGFloat = 158  // 适配两个按钮 + 间距
 
         let panel = GlassPanel(size: NSSize(width: width, height: height),
-                               cornerRadius: 14)
+                               cornerRadius: Glass.radiusCard)
         let host = panel.contentBox
 
         let startBtn = GlassButton(symbol: "record.circle",
@@ -387,20 +330,12 @@ final class RecordingSelectionView: NSView {
         ])
 
         let target = confirmToolbarTargetOrigin(width: width)
-        panel.setFrameOrigin(NSPoint(x: target.x, y: target.y - 12))
-        panel.alphaValue = 0
+        // 先入场（alpha 0 起步）再挂子窗口，避免在旧 frame 处闪一帧
+        PanelFX.animateIn(panel: panel, to: target)
         if let parent = window {
             parent.addChildWindow(panel, ordered: .above)
         }
-        panel.orderFront(nil)
         confirmPanel = panel
-
-        NSAnimationContext.runAnimationGroup { ctx in
-            ctx.duration = 0.20
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = 1.0
-            panel.animator().setFrameOrigin(target)
-        }
     }
 
     private func hideConfirmToolbar() {
@@ -454,60 +389,18 @@ final class RecordingSelectionView: NSView {
     // MARK: - 尺寸徽章（复用截图样式）
 
     private func showSizeBadge() {
-        if sizeBadgePanel != nil { return }
-        let panel = GlassPanel(size: NSSize(width: 110, height: 28),
-                               cornerRadius: Glass.radiusBadge)
-        let label = NSTextField(labelWithString: "")
-        label.font = NSFont.monospacedDigitSystemFont(ofSize: 12, weight: .semibold)
-        label.textColor = .white
-        label.backgroundColor = .clear
-        label.isBezeled = false
-        label.isEditable = false
-        label.alignment = .center
-        label.translatesAutoresizingMaskIntoConstraints = false
-        panel.contentBox.addSubview(label)
-        NSLayoutConstraint.activate([
-            label.centerXAnchor.constraint(equalTo: panel.contentBox.centerXAnchor),
-            label.centerYAnchor.constraint(equalTo: panel.contentBox.centerYAnchor),
-        ])
-        if let parent = window {
-            parent.addChildWindow(panel, ordered: .above)
-        }
-        panel.orderFront(nil)
-        sizeBadgePanel = panel
-        sizeBadgeLabel = label
+        sizeBadge.show(attachedTo: window)
     }
 
     private func updateSizeBadge() {
-        guard let panel = sizeBadgePanel, let label = sizeBadgeLabel,
-              selectionRect.width > 0, selectionRect.height > 0,
-              let pw = window else { return }
+        guard selectionRect.width > 0, selectionRect.height > 0, let pw = window else { return }
         let scale = pw.screen?.backingScaleFactor ?? 1.0
         let text = " \(Int(selectionRect.width * scale)) × \(Int(selectionRect.height * scale)) "
-        label.stringValue = text
-        label.sizeToFit()
-        let w = max(110, ceil(label.frame.width) + 24)
-        panel.resize(to: NSSize(width: w, height: 28))
-
-        let so = pw.frame.origin
-        var x = so.x + selectionRect.midX - w / 2
-        var y = so.y + selectionRect.maxY + 8
-        let screenFrame = pw.screen?.frame ?? pw.frame
-        if y + 28 > so.y + screenFrame.height - 8 {
-            y = so.y + selectionRect.minY - 28 - 8
-        }
-        x = max(so.x + 8, min(x, so.x + screenFrame.width - w - 8))
-        y = max(so.y + 8, min(y, so.y + screenFrame.height - 28 - 8))
-        panel.setFrameOrigin(NSPoint(x: x, y: y))
+        sizeBadge.update(text: text, relativeTo: selectionRect, in: pw)
     }
 
     private func hideSizeBadge() {
-        if let p = sizeBadgePanel {
-            p.parent?.removeChildWindow(p)
-            p.orderOut(nil)
-        }
-        sizeBadgePanel = nil
-        sizeBadgeLabel = nil
+        sizeBadge.hide()
     }
 
     // MARK: - 关闭清理（RecordingManager 在关 overlay 前调用）
@@ -523,13 +416,9 @@ final class RecordingSelectionView: NSView {
         discardCursorRects()
         if hasSelection {
             // 1. resize handles 优先
-            let cursors: [NSCursor] = [
-                .resizeUpDown, .resizeUpDown, .resizeUpDown, .resizeUpDown,
-                .resizeUpDown, .resizeLeftRight, .resizeUpDown, .resizeLeftRight
-            ]
             for (i, h) in handleRects.enumerated() {
-                addCursorRect(h.insetBy(dx: -handleHitPad, dy: -handleHitPad),
-                              cursor: cursors[i])
+                addCursorRect(h.insetBy(dx: -SelectionHandles.hitPad, dy: -SelectionHandles.hitPad),
+                              cursor: SelectionHandles.cursor(forHandle: i))
             }
             // 2. 选区内：openHand 提示可拖
             addCursorRect(selectionRect, cursor: .openHand)

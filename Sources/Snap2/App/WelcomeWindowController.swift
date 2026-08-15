@@ -1,12 +1,12 @@
 import AppKit
 
-/// 首启欢迎窗口 — 液态玻璃风格。
+/// 首启欢迎窗口 — 扁平原生风。
 final class WelcomeWindowController: NSWindowController {
 
     private var onComplete: (() -> Void)?
 
     /// 主按钮 / 提示 label 引用，授权流程里用来切换文案
-    private weak var startButton: WelcomeAccentButton?
+    private weak var startButton: NSButton?
     private weak var permLabel: NSTextField?
 
     init(onComplete: @escaping () -> Void) {
@@ -25,7 +25,7 @@ final class WelcomeWindowController: NSWindowController {
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
         window.center()
-        window.backgroundColor = .clear
+        window.backgroundColor = .windowBackgroundColor
         // 跟随系统明暗
         window.appearance = nil
 
@@ -39,65 +39,57 @@ final class WelcomeWindowController: NSWindowController {
     private func setupContent(size: NSSize) {
         guard let contentView = window?.contentView else { return }
 
-        // 全屏液态玻璃底（暖纸 tint + 顶光 + 底暖光，自动跟随系统明暗）
-        ClaudeGlass.install(into: contentView)
+        // 整列用 Auto Layout 纵向排布，换文案/换语言不会错位
+        let column = NSStackView()
+        column.orientation = .vertical
+        column.alignment = .centerX
+        column.spacing = 12
+        column.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(column)
 
-        // 顶部 Logo + 标题
+        // 顶部提示 + Logo + 标题
         let badge = NSTextField(labelWithString: "首次启动引导")
-        badge.font = NSFont.systemFont(ofSize: 11, weight: .medium)
-        badge.textColor = ClaudeTheme.accent
+        badge.font = NSFont.systemFont(ofSize: 11)
+        badge.textColor = .tertiaryLabelColor
         badge.alignment = .center
         badge.backgroundColor = .clear
-        badge.wantsLayer = true
-        badge.layer?.backgroundColor = ClaudeTheme.accent.withAlphaComponent(0.10).cgColor
-        badge.layer?.cornerRadius = 10
-        badge.layer?.cornerCurve = .continuous
-        badge.frame = NSRect(x: (size.width - 100) / 2, y: size.height - 58, width: 100, height: 22)
-        contentView.addSubview(badge)
+        column.addArrangedSubview(badge)
+        column.setCustomSpacing(12, after: badge)
 
-        let logoSize: CGFloat = 88
-        let logoY = size.height - 172
-        let logo = AppearanceAwareGradientView(cornerRadius: 22)
-        logo.frame = NSRect(x: (size.width - logoSize) / 2, y: logoY, width: logoSize, height: logoSize)
-        logo.layer?.shadowColor = NSColor.black.withAlphaComponent(0.18).cgColor
-        logo.layer?.shadowOpacity = 1
-        logo.layer?.shadowRadius = 16
-        logo.layer?.shadowOffset = CGSize(width: 0, height: -4)
-        contentView.addSubview(logo)
-
-        let icon = NSImageView(frame: NSRect(x: 0, y: 0, width: logoSize, height: logoSize))
-        if let img = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: nil) {
-            let cfg = NSImage.SymbolConfiguration(pointSize: 44, weight: .light)
-            icon.image = img.withSymbolConfiguration(cfg)
-            icon.contentTintColor = .white
-        }
-        logo.addSubview(icon)
+        let logo = NSImageView()
+        logo.image = NSApplication.shared.applicationIconImage
+        logo.imageScaling = .scaleProportionallyUpOrDown
+        logo.translatesAutoresizingMaskIntoConstraints = false
+        logo.widthAnchor.constraint(equalToConstant: 80).isActive = true
+        logo.heightAnchor.constraint(equalToConstant: 80).isActive = true
+        column.addArrangedSubview(logo)
+        column.setCustomSpacing(14, after: logo)
 
         let title = NSTextField(labelWithString: "Snap²")
-        title.font = NSFont.systemFont(ofSize: 34, weight: .semibold)
-        title.textColor = ClaudeTheme.ink
+        title.font = NSFont.systemFont(ofSize: 28, weight: .semibold)
+        title.textColor = .labelColor
         title.backgroundColor = .clear
         title.alignment = .center
-        title.frame = NSRect(x: 0, y: logoY - 54, width: size.width, height: 42)
-        contentView.addSubview(title)
+        column.addArrangedSubview(title)
+        column.setCustomSpacing(6, after: title)
 
         let subtitle = NSTextField(labelWithString: "轻盈、快捷、带即时标注能力的 macOS 截图工作台")
-        subtitle.font = NSFont.systemFont(ofSize: 13, weight: .regular)
-        subtitle.textColor = ClaudeTheme.inkSecondary
+        subtitle.font = NSFont.systemFont(ofSize: 13)
+        subtitle.textColor = .secondaryLabelColor
         subtitle.backgroundColor = .clear
         subtitle.alignment = .center
-        subtitle.frame = NSRect(x: 54, y: logoY - 82, width: size.width - 108, height: 22)
-        contentView.addSubview(subtitle)
+        column.addArrangedSubview(subtitle)
+        column.setCustomSpacing(4, after: subtitle)
 
         let intro = NSTextField(labelWithString: "区域截图、标注、复制与保存都在一次操作里完成")
         intro.font = NSFont.systemFont(ofSize: 12)
-        intro.textColor = ClaudeTheme.inkTertiary
+        intro.textColor = .tertiaryLabelColor
         intro.backgroundColor = .clear
         intro.alignment = .center
-        intro.frame = NSRect(x: 54, y: logoY - 104, width: size.width - 108, height: 18)
-        contentView.addSubview(intro)
+        column.addArrangedSubview(intro)
+        column.setCustomSpacing(18, after: intro)
 
-        // 功能格子
+        // 功能格子（扁平：纯图标 + 文字，轻底色）
         let features: [(String, String, String)] = [
             ("crop", "区域截图", "拖拽框选，松手即进标注"),
             ("scribble.variable", "实时标注", "箭头、矩形、画笔、文字…"),
@@ -106,128 +98,154 @@ final class WelcomeWindowController: NSWindowController {
             ("keyboard", "全键盘", "1-7 切工具，⌘Z 撤销"),
         ]
 
-        let cellW: CGFloat = 252
-        let cellH: CGFloat = 78
-        let gridY: CGFloat = 182
-        for (i, item) in features.enumerated() {
-            let row = i / 2, col = i % 2
-            let x = (size.width - cellW * 2 - 16) / 2 + CGFloat(col) * (cellW + 16)
-            let y = gridY + CGFloat(1 - row) * (cellH + 14)
-            addFeatureCell(in: contentView,
-                           frame: NSRect(x: x, y: y, width: cellW, height: cellH),
-                           symbol: item.0, title: item.1, desc: item.2,
-                           usesSecondaryAccent: i % 2 == 1)
-        }
+        let grid = NSGridView()
+        grid.columnSpacing = 12
+        grid.rowSpacing = 12
+        grid.translatesAutoresizingMaskIntoConstraints = false
+        grid.addRow(with: [makeFeatureCell(symbol: features[0].0, title: features[0].1, desc: features[0].2),
+                           makeFeatureCell(symbol: features[1].0, title: features[1].1, desc: features[1].2)])
+        grid.addRow(with: [makeFeatureCell(symbol: features[2].0, title: features[2].1, desc: features[2].2),
+                           makeFeatureCell(symbol: features[3].0, title: features[3].1, desc: features[3].2)])
+        column.addArrangedSubview(grid)
+        column.setCustomSpacing(18, after: grid)
 
-        // 权限提示
+        // 权限提示（扁平）
         let permBox = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.controlFill.cgColor
-            v.layer?.borderColor = ClaudeTheme.stroke.cgColor
+            v.layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.30).cgColor
         }
-        permBox.frame = NSRect(x: 52, y: 88, width: size.width - 104, height: 76)
+        permBox.translatesAutoresizingMaskIntoConstraints = false
         permBox.wantsLayer = true
-        permBox.layer?.cornerRadius = 16
-        permBox.layer?.borderWidth = 1
-        permBox.layer?.shadowColor = ClaudeTheme.accent.withAlphaComponent(0.10).cgColor
-        permBox.layer?.shadowOpacity = 1.0
-        permBox.layer?.shadowRadius = 10
-        permBox.layer?.shadowOffset = CGSize(width: 0, height: -2)
-        contentView.addSubview(permBox)
+        permBox.layer?.cornerRadius = 8
+        permBox.layer?.cornerCurve = .continuous
+        column.addArrangedSubview(permBox)
+        column.setCustomSpacing(16, after: permBox)
 
-        let permIcon = NSImageView(frame: NSRect(x: 16, y: 25, width: 24, height: 24))
+        let permIcon = NSImageView()
         if let img = NSImage(systemSymbolName: "lock.shield", accessibilityDescription: nil) {
             permIcon.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-            permIcon.contentTintColor = ClaudeTheme.accent
+            permIcon.contentTintColor = .controlAccentColor
         }
+        permIcon.translatesAutoresizingMaskIntoConstraints = false
         permBox.addSubview(permIcon)
 
         let permTitle = NSTextField(labelWithString: "完成屏幕录制权限授权")
         permTitle.font = NSFont.systemFont(ofSize: 12, weight: .semibold)
-        permTitle.textColor = ClaudeTheme.ink
+        permTitle.textColor = .labelColor
         permTitle.backgroundColor = .clear
-        permTitle.frame = NSRect(x: 48, y: 39, width: permBox.frame.width - 62, height: 18)
+        permTitle.translatesAutoresizingMaskIntoConstraints = false
         permBox.addSubview(permTitle)
 
         let permLabel = NSTextField(labelWithString: "需要「屏幕录制」权限。点击下方按钮后，将打开系统设置授权。")
         permLabel.font = NSFont.systemFont(ofSize: 11)
-        permLabel.textColor = ClaudeTheme.inkSecondary
+        permLabel.textColor = .secondaryLabelColor
         permLabel.backgroundColor = .clear
         permLabel.maximumNumberOfLines = 2
         permLabel.lineBreakMode = .byWordWrapping
-        permLabel.frame = NSRect(x: 48, y: 14, width: permBox.frame.width - 64, height: 24)
+        permLabel.translatesAutoresizingMaskIntoConstraints = false
         permBox.addSubview(permLabel)
         self.permLabel = permLabel
 
-        // 主按钮（玻璃强调）
-        let buttonW: CGFloat = 240, buttonH: CGFloat = 42
-        let btn = WelcomeAccentButton(frame: NSRect(
-            x: (size.width - buttonW) / 2, y: 30, width: buttonW, height: buttonH))
+        NSLayoutConstraint.activate([
+            permBox.widthAnchor.constraint(equalTo: grid.widthAnchor),
+            permBox.heightAnchor.constraint(equalToConstant: 68),
+
+            permIcon.leadingAnchor.constraint(equalTo: permBox.leadingAnchor, constant: 14),
+            permIcon.centerYAnchor.constraint(equalTo: permBox.centerYAnchor),
+            permIcon.widthAnchor.constraint(equalToConstant: 24),
+            permIcon.heightAnchor.constraint(equalToConstant: 24),
+
+            permTitle.leadingAnchor.constraint(equalTo: permIcon.trailingAnchor, constant: 10),
+            permTitle.topAnchor.constraint(equalTo: permBox.topAnchor, constant: 12),
+            permTitle.trailingAnchor.constraint(lessThanOrEqualTo: permBox.trailingAnchor, constant: -12),
+
+            permLabel.leadingAnchor.constraint(equalTo: permTitle.leadingAnchor),
+            permLabel.topAnchor.constraint(equalTo: permTitle.bottomAnchor, constant: 3),
+            permLabel.trailingAnchor.constraint(lessThanOrEqualTo: permBox.trailingAnchor, constant: -12),
+            permLabel.bottomAnchor.constraint(lessThanOrEqualTo: permBox.bottomAnchor, constant: -8),
+        ])
+
+        // 主按钮（标准系统按钮，自动跟随强调色）
+        let btn = NSButton(frame: .zero)
         btn.title = "授权并开始使用"
+        btn.bezelStyle = .rounded
+        btn.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        btn.keyEquivalent = "\r"
         btn.target = self
         btn.action = #selector(startTapped)
-        contentView.addSubview(btn)
+        btn.translatesAutoresizingMaskIntoConstraints = false
+        btn.widthAnchor.constraint(equalToConstant: 240).isActive = true
+        btn.heightAnchor.constraint(equalToConstant: 38).isActive = true
+        column.addArrangedSubview(btn)
         self.startButton = btn
+        column.setCustomSpacing(8, after: btn)
 
         let footnote = NSTextField(labelWithString: "授权完成后将自动继续，无需重启应用")
         footnote.font = NSFont.systemFont(ofSize: 11)
-        footnote.textColor = ClaudeTheme.inkTertiary
+        footnote.textColor = .tertiaryLabelColor
         footnote.alignment = .center
         footnote.backgroundColor = .clear
-        footnote.frame = NSRect(x: 0, y: 10, width: size.width, height: 16)
-        contentView.addSubview(footnote)
+        column.addArrangedSubview(footnote)
+
+        NSLayoutConstraint.activate([
+            column.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 30),
+            column.centerXAnchor.constraint(equalTo: contentView.centerXAnchor),
+            // 小于等于：内容变长（本地化等）时约束仍可满足，不会被迫随机断链
+            column.bottomAnchor.constraint(lessThanOrEqualTo: contentView.bottomAnchor, constant: -12),
+            column.leadingAnchor.constraint(greaterThanOrEqualTo: contentView.leadingAnchor, constant: 24),
+            column.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor, constant: -24),
+        ])
     }
 
-    private func addFeatureCell(in container: NSView,
-                                frame: NSRect,
-                                symbol: String,
-                                title: String,
-                                desc: String,
-                                usesSecondaryAccent: Bool)
-    {
+    private func makeFeatureCell(symbol: String, title: String, desc: String) -> NSView {
         let cell = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.creamCard.cgColor
-            v.layer?.borderColor = ClaudeTheme.stroke.cgColor
-            v.layer?.shadowColor = ClaudeTheme.accentShadow.cgColor
+            v.layer?.backgroundColor = NSColor.quaternaryLabelColor.withAlphaComponent(0.22).cgColor
         }
-        cell.frame = frame
+        cell.translatesAutoresizingMaskIntoConstraints = false
         cell.wantsLayer = true
-        cell.layer?.cornerRadius = 16
+        cell.layer?.cornerRadius = 8
         cell.layer?.cornerCurve = .continuous
-        cell.layer?.borderWidth = 1
-        cell.layer?.shadowOpacity = 1.0
-        cell.layer?.shadowRadius = 10
-        cell.layer?.shadowOffset = CGSize(width: 0, height: -2)
 
-        let iconBg = AppearanceAwareView { v in
-            v.layer?.backgroundColor = (usesSecondaryAccent ? ClaudeTheme.secondarySoft : ClaudeTheme.accentSoft).cgColor
-        }
-        iconBg.frame = NSRect(x: 14, y: (frame.height - 36) / 2, width: 36, height: 36)
-        iconBg.wantsLayer = true
-        iconBg.layer?.cornerRadius = 11
-        cell.addSubview(iconBg)
-
-        let icon = NSImageView(frame: NSRect(x: 0, y: 0, width: 36, height: 36))
+        let icon = NSImageView()
         if let img = NSImage(systemSymbolName: symbol, accessibilityDescription: nil) {
-            icon.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 15, weight: .medium))
-            icon.contentTintColor = usesSecondaryAccent ? ClaudeTheme.secondaryAccent : ClaudeTheme.accent
+            icon.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 17, weight: .medium))
+            icon.contentTintColor = .controlAccentColor
         }
-        iconBg.addSubview(icon)
+        icon.translatesAutoresizingMaskIntoConstraints = false
+        cell.addSubview(icon)
 
         let titleLabel = NSTextField(labelWithString: title)
         titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
-        titleLabel.textColor = ClaudeTheme.ink
+        titleLabel.textColor = .labelColor
         titleLabel.backgroundColor = .clear
-        titleLabel.frame = NSRect(x: 62, y: frame.height - 33, width: frame.width - 74, height: 18)
+        titleLabel.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(titleLabel)
 
         let descLabel = NSTextField(labelWithString: desc)
         descLabel.font = NSFont.systemFont(ofSize: 11)
-        descLabel.textColor = ClaudeTheme.inkSecondary
+        descLabel.textColor = .secondaryLabelColor
         descLabel.backgroundColor = .clear
-        descLabel.frame = NSRect(x: 62, y: 18, width: frame.width - 74, height: 16)
+        descLabel.translatesAutoresizingMaskIntoConstraints = false
         cell.addSubview(descLabel)
 
-        container.addSubview(cell)
+        NSLayoutConstraint.activate([
+            cell.widthAnchor.constraint(equalToConstant: 252),
+            cell.heightAnchor.constraint(equalToConstant: 68),
+
+            icon.leadingAnchor.constraint(equalTo: cell.leadingAnchor, constant: 16),
+            icon.centerYAnchor.constraint(equalTo: cell.centerYAnchor),
+            icon.widthAnchor.constraint(equalToConstant: 24),
+            icon.heightAnchor.constraint(equalToConstant: 24),
+
+            titleLabel.leadingAnchor.constraint(equalTo: icon.trailingAnchor, constant: 12),
+            titleLabel.topAnchor.constraint(equalTo: cell.topAnchor, constant: 13),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -12),
+
+            descLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
+            descLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
+            descLabel.trailingAnchor.constraint(lessThanOrEqualTo: cell.trailingAnchor, constant: -12),
+        ])
+
+        return cell
     }
 
     @objc private func startTapped() {
@@ -255,24 +273,13 @@ final class WelcomeWindowController: NSWindowController {
 
     private func beginAwaitingPermission() {
         startButton?.title = "等待授权…"
-        startButton?.attributedTitle = NSAttributedString(
-            string: "等待授权…",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-                .foregroundColor: NSColor.white
-            ])
         startButton?.isEnabled = false
         permLabel?.stringValue = "请把图标拖进系统设置的列表，授权完成后将自动继续。"
     }
 
     private func resetForPermissionRetry() {
         startButton?.isEnabled = true
-        startButton?.attributedTitle = NSAttributedString(
-            string: "再次尝试授权",
-            attributes: [
-                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-                .foregroundColor: NSColor.white
-            ])
+        startButton?.title = "再次尝试授权"
         permLabel?.stringValue = "未检测到授权。请点击下方按钮重新打开授权引导。"
     }
 
@@ -287,93 +294,5 @@ final class WelcomeWindowController: NSWindowController {
     func showWindow() {
         window?.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
-    }
-}
-
-// MARK: - 玻璃质感主按钮
-
-final class WelcomeAccentButton: NSButton {
-
-    private let bgLayer = CAGradientLayer()
-    private let strokeLayer = CAShapeLayer()
-    private var trackingArea: NSTrackingArea?
-    private var isHovered = false
-    private var isPressed = false
-
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        bezelStyle = .inline
-        isBordered = false
-        wantsLayer = true
-        layer?.masksToBounds = false
-
-        layer?.insertSublayer(bgLayer, at: 0)
-        layer?.addSublayer(strokeLayer)
-
-        font = NSFont.systemFont(ofSize: 14, weight: .semibold)
-        contentTintColor = .white
-        keyEquivalent = "\r"
-        attributedTitle = NSAttributedString(string: "授权并开始使用",
-                                             attributes: [
-                                                .font: NSFont.systemFont(ofSize: 14, weight: .semibold),
-                                                .foregroundColor: NSColor.white
-                                             ])
-
-        bgLayer.startPoint = CGPoint(x: 0.05, y: 0.95)
-        bgLayer.endPoint = CGPoint(x: 0.95, y: 0.05)
-        strokeLayer.fillColor = .clear
-        strokeLayer.lineWidth = 1
-
-        refresh()
-    }
-    required init?(coder: NSCoder) { fatalError() }
-
-    override func updateTrackingAreas() {
-        super.updateTrackingAreas()
-        if let a = trackingArea { removeTrackingArea(a) }
-        let a = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
-        addTrackingArea(a); trackingArea = a
-    }
-    override func mouseEntered(with event: NSEvent) { isHovered = true; refresh() }
-    override func mouseExited(with event: NSEvent)  { isHovered = false; isPressed = false; refresh() }
-    override func mouseDown(with event: NSEvent) {
-        isPressed = true; refresh()
-        super.mouseDown(with: event)
-        isPressed = false; refresh()
-    }
-
-    override func layout() {
-        super.layout()
-        CATransaction.begin()
-        CATransaction.setDisableActions(true)
-        bgLayer.frame = bounds
-        bgLayer.cornerRadius = bounds.height / 2
-        strokeLayer.frame = bounds
-        let inset: CGFloat = 0.5
-        let rect = bounds.insetBy(dx: inset, dy: inset)
-        strokeLayer.path = CGPath(roundedRect: rect, cornerWidth: rect.height / 2, cornerHeight: rect.height / 2, transform: nil)
-        CATransaction.commit()
-    }
-
-    override func viewDidChangeEffectiveAppearance() {
-        super.viewDidChangeEffectiveAppearance()
-        refresh()
-    }
-
-    private func refresh() {
-        let primaryAlpha: CGFloat = isPressed ? 0.86 : (isHovered ? 1.0 : 0.96)
-        let secondaryAlpha: CGFloat = isPressed ? 0.54 : (isHovered ? 0.78 : 0.62)
-
-        effectiveAppearance.performAsCurrentDrawingAppearance {
-            let accent = isPressed ? ClaudeTheme.accentPressed : ClaudeTheme.accent
-            CATransaction.begin()
-            CATransaction.setAnimationDuration(Glass.animDuration)
-            bgLayer.colors = [
-                accent.withAlphaComponent(primaryAlpha).cgColor,
-                ClaudeTheme.secondaryAccent.withAlphaComponent(secondaryAlpha).cgColor
-            ]
-            strokeLayer.strokeColor = NSColor.white.withAlphaComponent(isHovered ? 0.52 : 0.40).cgColor
-            CATransaction.commit()
-        }
     }
 }

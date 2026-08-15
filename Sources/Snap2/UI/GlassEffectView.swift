@@ -1,25 +1,19 @@
 import AppKit
 import QuartzCore
 
-/// 液态玻璃容器视图。
+/// HUD 玻璃容器视图（扁平版）。
 ///
 /// 渲染层栈（从下到上）：
-/// 1. NSVisualEffectView (.hudWindow / behindWindow) ── 模糊背景
-/// 2. tintLayer ── 极轻的暗色调，确保白色高光可见
-/// 3. accentWashLayer ── 很轻的暖色/冷色斜向折光
-/// 4. highlightLayer ── 顶部到 50% 处的白色渐变高光（玻璃反光）
-/// 5. bottomGlowLayer ── 底部边缘的反光线
-/// 6. innerStrokeLayer ── 1px 内描边（玻璃边缘）
-/// 7. contentView ── 子视图载入区
+/// 1. NSVisualEffectView (.hudWindow / behindWindow) ── 模糊背景，保证任意屏幕内容之上可读
+/// 2. tintLayer ── 极轻的暗色调
+/// 3. innerStrokeLayer ── 1px 内描边（玻璃边缘）
+/// 4. contentView ── 子视图载入区
 final class GlassEffectView: NSView {
 
     let contentView = NSView()
 
     private let blurView = NSVisualEffectView()
     private let tintLayer = CALayer()
-    private let accentWashLayer = CAGradientLayer()
-    private let highlightLayer = CAGradientLayer()
-    private let bottomGlowLayer = CAGradientLayer()
     private let innerStrokeLayer = CAShapeLayer()
 
     var cornerRadius: CGFloat = Glass.radiusToolbar {
@@ -53,9 +47,6 @@ final class GlassEffectView: NSView {
         // 加载层级
         if let layer = layer {
             layer.addSublayer(tintLayer)
-            layer.addSublayer(accentWashLayer)
-            layer.addSublayer(highlightLayer)
-            layer.addSublayer(bottomGlowLayer)
             layer.addSublayer(innerStrokeLayer)
         }
 
@@ -77,29 +68,6 @@ final class GlassEffectView: NSView {
     }
 
     private func configureLayers() {
-        // 顶部 → 中部白色渐变（玻璃反光）
-        highlightLayer.colors = [
-            Glass.topHighlight.cgColor,
-            Glass.topHighlightFade.cgColor,
-        ]
-        highlightLayer.startPoint = CGPoint(x: 0.5, y: 1.0)
-        highlightLayer.endPoint = CGPoint(x: 0.5, y: 0.45)
-        highlightLayer.locations = [0.0, 1.0]
-
-        // 轻微斜向折光，让 HUD 不只是半透明黑块。
-        accentWashLayer.startPoint = CGPoint(x: 0.0, y: 1.0)
-        accentWashLayer.endPoint = CGPoint(x: 1.0, y: 0.0)
-        accentWashLayer.locations = [0.0, 0.58, 1.0]
-
-        // 底部 1px 反光线
-        bottomGlowLayer.colors = [
-            NSColor.white.withAlphaComponent(0.0).cgColor,
-            NSColor.white.withAlphaComponent(0.14).cgColor,
-        ]
-        bottomGlowLayer.startPoint = CGPoint(x: 0.5, y: 1.0)
-        bottomGlowLayer.endPoint = CGPoint(x: 0.5, y: 0.0)
-        bottomGlowLayer.locations = [0.92, 1.0]
-
         // 1px 内描边
         innerStrokeLayer.fillColor = .clear
         innerStrokeLayer.strokeColor = Glass.strokeColor.cgColor
@@ -130,15 +98,6 @@ final class GlassEffectView: NSView {
         } else {
             tintLayer.backgroundColor = NSColor.black.withAlphaComponent(0.16).cgColor
         }
-
-        accentWashLayer.frame = r
-        accentWashLayer.colors = [
-            ClaudeTheme.accent.withAlphaComponent(0.08).cgColor,
-            NSColor.clear.cgColor,
-            ClaudeTheme.secondaryAccent.withAlphaComponent(0.07).cgColor,
-        ]
-        highlightLayer.frame = r
-        bottomGlowLayer.frame = r
 
         // 内描边沿圆角矩形走（缩进 0.5px 让 1px 描边落在内）
         let inset: CGFloat = Glass.strokeWidth / 2

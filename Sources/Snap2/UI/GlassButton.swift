@@ -1,11 +1,10 @@
 import AppKit
 
-/// 玻璃按钮。无边框、悬停高亮、选中态高亮 + 强调描边。
+/// 玻璃按钮（扁平版）。无边框、悬停高亮、选中态纯色填充。
 /// 非 final：PinHoverToolbar.ToolGlassButton 通过继承挂载 toolType 身份。
 class GlassButton: NSButton {
 
     private let bgLayer = CALayer()
-    private let strokeLayer = CAShapeLayer()
     private var trackingArea: NSTrackingArea?
     private var isHovered = false
     private var isPressed = false
@@ -14,12 +13,7 @@ class GlassButton: NSButton {
         didSet { refreshState() }
     }
 
-    var accentColor: NSColor = ClaudeTheme.accent {
-        didSet { refreshState() }
-    }
-
-    /// 选中时整个按钮的描边发光（false 时只换底色，无描边）
-    var selectionGlows: Bool = true {
+    var accentColor: NSColor = .controlAccentColor {
         didSet { refreshState() }
     }
 
@@ -42,14 +36,11 @@ class GlassButton: NSButton {
         bezelStyle = .inline
         isBordered = false
         wantsLayer = true
-        layer?.masksToBounds = false
 
-        // 子层级：底色 + 描边
         layer?.insertSublayer(bgLayer, at: 0)
-        layer?.addSublayer(strokeLayer)
 
         if let symbol = symbol, let img = NSImage(systemSymbolName: symbol, accessibilityDescription: tooltip) {
-            let cfg = NSImage.SymbolConfiguration(pointSize: 14, weight: .medium)
+            let cfg = NSImage.SymbolConfiguration(pointSize: 13, weight: .medium)
             image = img.withSymbolConfiguration(cfg)
             imagePosition = .imageOnly
             self.title = ""
@@ -68,24 +59,12 @@ class GlassButton: NSButton {
         bgLayer.cornerRadius = Glass.radiusButton
         bgLayer.cornerCurve = .continuous
 
-        strokeLayer.fillColor = .clear
-        strokeLayer.lineWidth = 1
-        strokeLayer.strokeColor = NSColor.clear.cgColor
-
         refreshState()
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let area = trackingArea { removeTrackingArea(area) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        trackingArea = area
+        rebuildHoverTrackingArea(existing: &trackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -111,13 +90,6 @@ class GlassButton: NSButton {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         bgLayer.frame = r
-        let strokeInset: CGFloat = 0.5
-        let strokeRect = r.insetBy(dx: strokeInset, dy: strokeInset)
-        strokeLayer.path = CGPath(roundedRect: strokeRect,
-                                  cornerWidth: Glass.radiusButton - strokeInset,
-                                  cornerHeight: Glass.radiusButton - strokeInset,
-                                  transform: nil)
-        strokeLayer.frame = bounds
         CATransaction.commit()
     }
 
@@ -139,16 +111,13 @@ class GlassButton: NSButton {
                     ? accentColor.withAlphaComponent(0.30).cgColor
                     : Glass.pressedFill.cgColor
             } else if isSelected {
-                bgLayer.backgroundColor = accentColor.withAlphaComponent(0.22).cgColor
+                bgLayer.backgroundColor = accentColor.withAlphaComponent(0.28).cgColor
             } else if isHovered {
                 bgLayer.backgroundColor = Glass.hoverFill.cgColor
             } else {
                 bgLayer.backgroundColor = NSColor.clear.cgColor
             }
 
-            strokeLayer.strokeColor = (isSelected && selectionGlows)
-                ? accentColor.withAlphaComponent(0.82).cgColor
-                : NSColor.clear.cgColor
             contentTintColor = (isSelected || isDestructive)
                 ? .white
                 : NSColor.white.withAlphaComponent(isHovered ? 1.0 : 0.86)
@@ -187,17 +156,14 @@ final class GlassColorSwatch: NSButton {
         heightAnchor.constraint(equalToConstant: diameter).isActive = true
 
         ringLayer.fillColor = .clear
-        ringLayer.lineWidth = 2
+        ringLayer.lineWidth = 1.5
         refresh()
     }
     required init?(coder: NSCoder) { fatalError() }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let a = trackingArea { removeTrackingArea(a) }
-        let a = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
-        addTrackingArea(a)
-        trackingArea = a
+        rebuildHoverTrackingArea(existing: &trackingArea)
     }
     override func mouseEntered(with event: NSEvent) { isHovered = true; refresh() }
     override func mouseExited(with event: NSEvent)  { isHovered = false; refresh() }
@@ -223,7 +189,7 @@ final class GlassColorSwatch: NSButton {
         ringLayer.path = CGPath(ellipseIn: ringRect, transform: nil)
         ringLayer.frame = bounds
         ringLayer.strokeColor = isSelected
-            ? NSColor.white.withAlphaComponent(0.95).cgColor
+            ? NSColor.white.withAlphaComponent(0.90).cgColor
             : NSColor.clear.cgColor
         CATransaction.commit()
     }

@@ -1,6 +1,6 @@
 import AppKit
 
-/// 设置窗口 — 左侧液态玻璃侧边栏 + 右侧详情。
+/// 设置窗口 — 原生风：左侧系统侧边栏 + 右侧平铺详情区。
 final class SettingsWindowController: NSWindowController {
 
     static let shared = SettingsWindowController()
@@ -13,7 +13,7 @@ final class SettingsWindowController: NSWindowController {
     // 侧边栏
     private var sidebarStack: NSStackView!
     private var sidebarItems: [SidebarItemView] = []
-    private var detailContainer: NSView!
+    private var detailColumn: NSView!
     private var currentDetailView: NSView?
 
     // 侧边栏底部 — 可点击版本号 + 升级胶囊
@@ -32,17 +32,9 @@ final class SettingsWindowController: NSWindowController {
         }
         var icon: String {
             switch self {
-            case .general: return "gearshape.fill"
+            case .general: return "gearshape"
             case .hotkey:  return "keyboard"
-            case .about:   return "info.circle.fill"
-            }
-        }
-        var subtitle: String {
-            switch self {
-            // 通用页含：启动 / 保存与格式 / 更新通道，旧文案"保存与格式"误导
-            case .general: return "启动、保存与更新"
-            case .hotkey:  return "全局快捷键"
-            case .about:   return "版本与信息"
+            case .about:   return "info.circle"
             }
         }
     }
@@ -55,7 +47,7 @@ final class SettingsWindowController: NSWindowController {
         let size = NSSize(width: 860, height: 620)
         let window = NSWindow(
             contentRect: NSRect(origin: .zero, size: size),
-            styleMask: [.titled, .closable, .miniaturizable, .fullSizeContentView],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable, .fullSizeContentView],
             backing: .buffered,
             defer: false
         )
@@ -64,9 +56,11 @@ final class SettingsWindowController: NSWindowController {
         window.titlebarAppearsTransparent = true
         window.isMovableByWindowBackground = true
         window.isReleasedWhenClosed = false
-        window.backgroundColor = .clear
+        window.backgroundColor = .windowBackgroundColor
+        // 内容超长时滚动（详情区套 NSScrollView），窗口可自由缩放
+        window.minSize = NSSize(width: 720, height: 460)
         window.center()
-        // 跟随系统明暗：浅色给暖纸面、深色给冷中性炭黑
+        // 跟随系统明暗
         window.appearance = nil
 
         super.init(window: window)
@@ -88,11 +82,8 @@ final class SettingsWindowController: NSWindowController {
     private func buildLayout(size: NSSize) {
         guard let contentView = window?.contentView else { return }
 
-        // 全窗口液态玻璃底（暖纸 tint + 顶光 + 底暖光，自动跟随系统明暗）
-        ClaudeGlass.install(into: contentView)
-
-        // —— 侧边栏（液态玻璃）——
-        let sidebarWidth: CGFloat = 236
+        // —— 侧边栏（系统 sidebar 材质）——
+        let sidebarWidth: CGFloat = 232
         let sidebar = NSVisualEffectView()
         sidebar.material = .sidebar
         sidebar.blendingMode = .behindWindow
@@ -100,80 +91,50 @@ final class SettingsWindowController: NSWindowController {
         sidebar.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(sidebar)
 
-        let sidebarTint = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.sidebarTint.withAlphaComponent(0.46).cgColor
-        }
-        sidebarTint.translatesAutoresizingMaskIntoConstraints = false
-        sidebar.addSubview(sidebarTint, positioned: .below, relativeTo: nil)
-
         // 侧边栏右侧 1px 分隔线
         let divider = AppearanceAwareDivider()
         divider.translatesAutoresizingMaskIntoConstraints = false
         contentView.addSubview(divider)
 
-        // 侧边栏标题
+        // 侧边栏品牌：App 图标 + 名称
         let brand = NSStackView()
         brand.orientation = .horizontal
-        brand.spacing = 10
+        brand.spacing = 8
         brand.alignment = .centerY
         brand.translatesAutoresizingMaskIntoConstraints = false
 
-        let brandIconBg = AppearanceAwareGradientView(cornerRadius: 8)
-        brandIconBg.translatesAutoresizingMaskIntoConstraints = false
-        brandIconBg.widthAnchor.constraint(equalToConstant: 30).isActive = true
-        brandIconBg.heightAnchor.constraint(equalToConstant: 30).isActive = true
-
         let brandIcon = NSImageView()
-        brandIcon.image = NSImage(systemSymbolName: "camera.viewfinder", accessibilityDescription: nil)?
-            .withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .semibold))
-        brandIcon.contentTintColor = .white
+        brandIcon.image = NSApplication.shared.applicationIconImage
+        brandIcon.imageScaling = .scaleProportionallyUpOrDown
         brandIcon.translatesAutoresizingMaskIntoConstraints = false
-        brandIconBg.addSubview(brandIcon)
-        NSLayoutConstraint.activate([
-            brandIcon.centerXAnchor.constraint(equalTo: brandIconBg.centerXAnchor),
-            brandIcon.centerYAnchor.constraint(equalTo: brandIconBg.centerYAnchor),
-        ])
-
-        let brandText = NSStackView()
-        brandText.orientation = .vertical
-        brandText.spacing = 0
-        brandText.alignment = .leading
+        brand.addArrangedSubview(brandIcon)
 
         let brandTitle = NSTextField(labelWithString: "Snap²")
-        brandTitle.font = NSFont.systemFont(ofSize: 15, weight: .semibold)
-        brandTitle.textColor = ClaudeTheme.ink
+        brandTitle.font = NSFont.systemFont(ofSize: 13, weight: .semibold)
+        brandTitle.textColor = .labelColor
         brandTitle.backgroundColor = .clear
-
-        let brandSub = NSTextField(labelWithString: "截图 · 标注")
-        brandSub.font = NSFont.systemFont(ofSize: 10)
-        brandSub.textColor = ClaudeTheme.inkSecondary
-        brandSub.backgroundColor = .clear
-
-        brandText.addArrangedSubview(brandTitle)
-        brandText.addArrangedSubview(brandSub)
-
-        brand.addArrangedSubview(brandIconBg)
-        brand.addArrangedSubview(brandText)
+        brand.addArrangedSubview(brandTitle)
 
         sidebar.addSubview(brand)
+
+        NSLayoutConstraint.activate([
+            brandIcon.widthAnchor.constraint(equalToConstant: 24),
+            brandIcon.heightAnchor.constraint(equalToConstant: 24),
+        ])
 
         // 菜单
         sidebarStack = NSStackView()
         sidebarStack.orientation = .vertical
-        sidebarStack.spacing = 8
+        sidebarStack.spacing = 4
         sidebarStack.alignment = .leading
         sidebarStack.translatesAutoresizingMaskIntoConstraints = false
         sidebar.addSubview(sidebarStack)
 
         for tab in Tab.allCases {
-            let item = SidebarItemView(
-                icon: tab.icon,
-                title: tab.label,
-                subtitle: tab.subtitle
-            )
+            let item = SidebarItemView(icon: tab.icon, title: tab.label)
             item.onClick = { [weak self] in self?.select(tab: tab) }
             item.translatesAutoresizingMaskIntoConstraints = false
-            item.heightAnchor.constraint(equalToConstant: 52).isActive = true
+            item.heightAnchor.constraint(equalToConstant: 34).isActive = true
             item.widthAnchor.constraint(equalToConstant: sidebarWidth - 24).isActive = true
             sidebarStack.addArrangedSubview(item)
             sidebarItems.append(item)
@@ -189,23 +150,37 @@ final class SettingsWindowController: NSWindowController {
 
         let footer = NSStackView(views: [versionButton, upgradePill])
         footer.orientation = .horizontal
-        footer.spacing = 6
+        footer.spacing = 8
         footer.alignment = .centerY
         footer.translatesAutoresizingMaskIntoConstraints = false
         sidebar.addSubview(footer)
 
-        // —— 详情容器 ——
-        detailContainer = NSView()
-        detailContainer.translatesAutoresizingMaskIntoConstraints = false
-        contentView.addSubview(detailContainer)
+        // —— 详情列（贴左、限宽、可滚动）——
+        // 内容列限宽与系统设置一致：行控件不贴到窗口右缘，缩放窗口时观感稳定。
+        // 宽度必须"确定"：只有两个 <=（限宽 648 / 不越过窗口右缘）时解不唯一，
+        // 缩放或重启都可能解出塌缩宽度（表现为内容只剩一半）。
+        // 用一条 999 优先级的右缘等式把宽度尽量顶满——999 压过 scrollview 的
+        // 内容拥抱（250，否则两者同为 250 会平局掷硬币），又让位于两条 1000
+        // 级上限，最终宽度恒等于 min(648, 可用宽度)，数学上唯一。
+        let maxColumnWidth: CGFloat = 648
+        detailColumn = NSView()
+        detailColumn.translatesAutoresizingMaskIntoConstraints = false
+        contentView.addSubview(detailColumn)
+
+        let stretchToEdge = detailColumn.trailingAnchor.constraint(equalTo: contentView.trailingAnchor)
+        stretchToEdge.priority = NSLayoutConstraint.Priority(999)
+        NSLayoutConstraint.activate([
+            detailColumn.leadingAnchor.constraint(equalTo: divider.trailingAnchor),
+            detailColumn.trailingAnchor.constraint(lessThanOrEqualTo: contentView.trailingAnchor),
+            detailColumn.widthAnchor.constraint(lessThanOrEqualToConstant: maxColumnWidth),
+            detailColumn.widthAnchor.constraint(greaterThanOrEqualToConstant: 360),
+            stretchToEdge,
+            detailColumn.topAnchor.constraint(equalTo: contentView.topAnchor),
+            detailColumn.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
+        ])
 
         // —— 约束 ——
         NSLayoutConstraint.activate([
-            sidebarTint.topAnchor.constraint(equalTo: sidebar.topAnchor),
-            sidebarTint.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor),
-            sidebarTint.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor),
-            sidebarTint.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor),
-
             sidebar.topAnchor.constraint(equalTo: contentView.topAnchor),
             sidebar.leadingAnchor.constraint(equalTo: contentView.leadingAnchor),
             sidebar.bottomAnchor.constraint(equalTo: contentView.bottomAnchor),
@@ -217,44 +192,15 @@ final class SettingsWindowController: NSWindowController {
             divider.widthAnchor.constraint(equalToConstant: 1),
 
             // 给标题让出 titlebar 高度
-            brand.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 42),
+            brand.topAnchor.constraint(equalTo: sidebar.topAnchor, constant: 44),
             brand.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 20),
 
-            sidebarStack.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 26),
+            sidebarStack.topAnchor.constraint(equalTo: brand.bottomAnchor, constant: 18),
             sidebarStack.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 12),
             sidebarStack.trailingAnchor.constraint(equalTo: sidebar.trailingAnchor, constant: -12),
 
             footer.bottomAnchor.constraint(equalTo: sidebar.bottomAnchor, constant: -14),
-            footer.centerXAnchor.constraint(equalTo: sidebar.centerXAnchor),
-            footer.leadingAnchor.constraint(greaterThanOrEqualTo: sidebar.leadingAnchor, constant: 12),
-            footer.trailingAnchor.constraint(lessThanOrEqualTo: sidebar.trailingAnchor, constant: -12),
-
-            detailContainer.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 12),
-            detailContainer.leadingAnchor.constraint(equalTo: divider.trailingAnchor, constant: 14),
-            detailContainer.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -14),
-            detailContainer.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -14),
-        ])
-
-        let detailPanel = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.cream.withAlphaComponent(0.52).cgColor
-            v.layer?.borderColor = ClaudeTheme.stroke.cgColor
-        }
-        detailPanel.translatesAutoresizingMaskIntoConstraints = false
-        detailPanel.wantsLayer = true
-        detailPanel.layer?.cornerRadius = 22
-        detailPanel.layer?.cornerCurve = .continuous
-        detailPanel.layer?.borderWidth = 1
-        detailPanel.layer?.shadowColor = ClaudeTheme.accent.withAlphaComponent(0.10).cgColor
-        detailPanel.layer?.shadowOpacity = 1.0
-        detailPanel.layer?.shadowRadius = 18
-        detailPanel.layer?.shadowOffset = CGSize(width: 0, height: -4)
-        detailContainer.addSubview(detailPanel)
-
-        NSLayoutConstraint.activate([
-            detailPanel.topAnchor.constraint(equalTo: detailContainer.topAnchor),
-            detailPanel.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor),
-            detailPanel.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor),
-            detailPanel.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor),
+            footer.leadingAnchor.constraint(equalTo: sidebar.leadingAnchor, constant: 20),
         ])
     }
 
@@ -273,18 +219,62 @@ final class SettingsWindowController: NSWindowController {
         case .about:   vc = aboutVC
         }
 
-        // 替换详情视图
-        currentDetailView?.removeFromSuperview()
+        // 替换详情视图：详情页装进无框 NSScrollView，内容超长时可滚动
+        currentDetailView?.superview?.removeFromSuperview()
         let v = vc.view
         v.translatesAutoresizingMaskIntoConstraints = false
-        detailContainer.addSubview(v)
+
+        let scroll = NSScrollView()
+        scroll.translatesAutoresizingMaskIntoConstraints = false
+        scroll.hasVerticalScroller = true
+        scroll.hasHorizontalScroller = false
+        scroll.autohidesScrollers = true
+        scroll.borderType = .noBorder
+        scroll.drawsBackground = false
+        scroll.verticalScrollElasticity = .none
+        detailColumn.addSubview(scroll)
+        scroll.documentView = v
         currentDetailView = v
+
         NSLayoutConstraint.activate([
-            v.topAnchor.constraint(equalTo: detailContainer.topAnchor, constant: 4),
-            v.leadingAnchor.constraint(equalTo: detailContainer.leadingAnchor, constant: 4),
-            v.trailingAnchor.constraint(equalTo: detailContainer.trailingAnchor, constant: -4),
-            v.bottomAnchor.constraint(equalTo: detailContainer.bottomAnchor, constant: -4),
+            scroll.topAnchor.constraint(equalTo: detailColumn.topAnchor),
+            scroll.leadingAnchor.constraint(equalTo: detailColumn.leadingAnchor),
+            scroll.trailingAnchor.constraint(equalTo: detailColumn.trailingAnchor),
+            scroll.bottomAnchor.constraint(equalTo: detailColumn.bottomAnchor),
+
+            // 只做纵向滚动：宽度始终撑满可视区，高度随内容自然生长
+            //（macOS 无 UIScrollView 式 contentLayoutGuide，用 NSClipView 当锚点）
+            v.leadingAnchor.constraint(equalTo: scroll.contentView.leadingAnchor),
+            v.trailingAnchor.constraint(equalTo: scroll.contentView.trailingAnchor),
+            v.topAnchor.constraint(equalTo: scroll.contentView.topAnchor),
+            v.bottomAnchor.constraint(greaterThanOrEqualTo: scroll.contentView.bottomAnchor),
         ])
+    }
+
+    // MARK: - 键盘导航
+
+    /// ↑/↓ 在分页间循环切换，⌘1…⌘3 直达。NSWindowController 在响应链里
+    /// （window 的 delegate 即本控制器），无控件捕获按键时会落到这里。
+    override func keyDown(with event: NSEvent) {
+        guard event.window === window else {
+            super.keyDown(with: event)
+            return
+        }
+        let tabs = Tab.allCases
+        if event.modifierFlags.contains(.command),
+           let digit = event.charactersIgnoringModifiers.flatMap({ Int($0) }),
+           (1...tabs.count).contains(digit) {
+            select(tab: tabs[digit - 1])
+            return
+        }
+        switch event.keyCode {
+        case 125: // ↓
+            select(tab: tabs[(currentTab.rawValue + 1) % tabs.count])
+        case 126: // ↑
+            select(tab: tabs[(currentTab.rawValue - 1 + tabs.count) % tabs.count])
+        default:
+            super.keyDown(with: event)
+        }
     }
 
     // MARK: - 更新检查 UI 联动
@@ -330,82 +320,59 @@ final class SettingsWindowController: NSWindowController {
         window.makeKeyAndOrderFront(nil)
         NSApp.activate(ignoringOtherApps: true)
     }
+
+    /// 菜单栏「关于」入口统一跳设置窗的关于页（替代系统 about 面板，避免两套信息）。
+    func showAboutPage() {
+        select(tab: .about)
+        showWindow()
+    }
 }
 
-// MARK: - 侧边栏单项（液态玻璃 hover/选中）
+// MARK: - 侧边栏单项（扁平：纯图标 + 文字，选中系统强调色平铺）
 
 final class SidebarItemView: NSView {
 
     var onClick: (() -> Void)?
 
     private let bgLayer = CALayer()
-    private let strokeLayer = CAShapeLayer()
-    private let iconBg = NSView()
     private let iconView = NSImageView()
     private let titleLabel = NSTextField(labelWithString: "")
-    private let subtitleLabel = NSTextField(labelWithString: "")
 
     private var trackingArea: NSTrackingArea?
     private var isHovered = false
     private var isSelected = false
+    private var keyObservers: [NSObjectProtocol] = []
 
-    init(icon: String, title: String, subtitle: String) {
+    init(icon: String, title: String) {
         super.init(frame: .zero)
         wantsLayer = true
-        layer?.masksToBounds = false
+        layer?.masksToBounds = true
 
-        bgLayer.cornerRadius = 12
+        bgLayer.cornerRadius = 6
         bgLayer.cornerCurve = .continuous
         layer?.addSublayer(bgLayer)
 
-        strokeLayer.fillColor = .clear
-        strokeLayer.lineWidth = 1
-        strokeLayer.strokeColor = NSColor.clear.cgColor
-        layer?.addSublayer(strokeLayer)
-
         if let img = NSImage(systemSymbolName: icon, accessibilityDescription: title) {
-            iconView.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .medium))
+            iconView.image = img.withSymbolConfiguration(NSImage.SymbolConfiguration(pointSize: 14, weight: .regular))
         }
-        iconView.contentTintColor = ClaudeTheme.inkSecondary
+        iconView.contentTintColor = .secondaryLabelColor
         iconView.translatesAutoresizingMaskIntoConstraints = false
         addSubview(iconView)
 
         titleLabel.stringValue = title
-        titleLabel.font = NSFont.systemFont(ofSize: 13, weight: .medium)
-        titleLabel.textColor = ClaudeTheme.ink
+        titleLabel.font = NSFont.systemFont(ofSize: 13)
+        titleLabel.textColor = .labelColor
         titleLabel.backgroundColor = .clear
         titleLabel.translatesAutoresizingMaskIntoConstraints = false
         addSubview(titleLabel)
 
-        subtitleLabel.stringValue = subtitle
-        subtitleLabel.font = NSFont.systemFont(ofSize: 10)
-        subtitleLabel.textColor = ClaudeTheme.inkTertiary
-        subtitleLabel.backgroundColor = .clear
-        subtitleLabel.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(subtitleLabel)
-
-        iconBg.wantsLayer = true
-        iconBg.layer?.cornerRadius = 7
-        iconBg.layer?.cornerCurve = .continuous
-        iconBg.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(iconBg, positioned: .below, relativeTo: iconView)
-
         NSLayoutConstraint.activate([
-            iconBg.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 12),
-            iconBg.centerYAnchor.constraint(equalTo: centerYAnchor),
-            iconBg.widthAnchor.constraint(equalToConstant: 28),
-            iconBg.heightAnchor.constraint(equalToConstant: 28),
+            iconView.leadingAnchor.constraint(equalTo: leadingAnchor, constant: 10),
+            iconView.centerYAnchor.constraint(equalTo: centerYAnchor),
 
-            iconView.centerXAnchor.constraint(equalTo: iconBg.centerXAnchor),
-            iconView.centerYAnchor.constraint(equalTo: iconBg.centerYAnchor),
-
-            titleLabel.leadingAnchor.constraint(equalTo: iconBg.trailingAnchor, constant: 10),
-            titleLabel.topAnchor.constraint(equalTo: topAnchor, constant: 9),
-            titleLabel.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -10),
-
-            subtitleLabel.leadingAnchor.constraint(equalTo: titleLabel.leadingAnchor),
-            subtitleLabel.topAnchor.constraint(equalTo: titleLabel.bottomAnchor, constant: 2),
-            subtitleLabel.trailingAnchor.constraint(equalTo: titleLabel.trailingAnchor),
+            titleLabel.leadingAnchor.constraint(equalTo: iconView.trailingAnchor, constant: 8),
+            titleLabel.centerYAnchor.constraint(equalTo: centerYAnchor),
+            titleLabel.trailingAnchor.constraint(lessThanOrEqualTo: trailingAnchor, constant: -10),
         ])
 
         refresh()
@@ -416,26 +383,36 @@ final class SidebarItemView: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let a = trackingArea { removeTrackingArea(a) }
-        let a = NSTrackingArea(rect: bounds,
-                               options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-                               owner: self, userInfo: nil)
-        addTrackingArea(a); trackingArea = a
+        rebuildHoverTrackingArea(existing: &trackingArea)
     }
 
     override func mouseEntered(with event: NSEvent) { isHovered = true; refresh() }
     override func mouseExited(with event: NSEvent)  { isHovered = false; refresh() }
     override func mouseDown(with event: NSEvent)    { onClick?() }
 
+    /// 挂进窗口后监听 key 状态：失焦时选中态降为系统 unemphasized 色（macOS 标准行为）
+    override func viewDidMoveToWindow() {
+        super.viewDidMoveToWindow()
+        keyObservers.forEach(NotificationCenter.default.removeObserver)
+        keyObservers = []
+        guard let window = window else { return }
+        for name in [NSWindow.didBecomeKeyNotification, NSWindow.didResignKeyNotification] {
+            keyObservers.append(NotificationCenter.default.addObserver(
+                forName: name, object: window, queue: .main
+            ) { [weak self] _ in self?.refresh() })
+        }
+        refresh()
+    }
+
+    deinit {
+        keyObservers.forEach(NotificationCenter.default.removeObserver)
+    }
+
     override func layout() {
         super.layout()
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         bgLayer.frame = bounds
-        strokeLayer.frame = bounds
-        let inset: CGFloat = 0.5
-        let r = bounds.insetBy(dx: inset, dy: inset)
-        strokeLayer.path = CGPath(roundedRect: r, cornerWidth: 12 - inset, cornerHeight: 12 - inset, transform: nil)
         CATransaction.commit()
     }
 
@@ -455,26 +432,21 @@ final class SidebarItemView: NSView {
             CATransaction.setAnimationDuration(Glass.animDuration)
 
             if isSelected {
-                bgLayer.backgroundColor = ClaudeTheme.selectionFill.cgColor
-                strokeLayer.strokeColor = ClaudeTheme.focusRing.cgColor
-                iconBg.layer?.backgroundColor = ClaudeTheme.accent.cgColor
-                titleLabel.textColor = ClaudeTheme.ink
-                subtitleLabel.textColor = ClaudeTheme.inkSecondary
-                iconView.contentTintColor = .white
+                let emphasized = window?.isKeyWindow ?? true
+                bgLayer.backgroundColor = (emphasized
+                    ? NSColor.selectedContentBackgroundColor
+                    : NSColor.unemphasizedSelectedContentBackgroundColor).cgColor
+                titleLabel.textColor = emphasized ? .white : .labelColor
+                iconView.contentTintColor = emphasized ? .white : .labelColor
             } else if isHovered {
-                bgLayer.backgroundColor = ClaudeTheme.controlHover.cgColor
-                strokeLayer.strokeColor = ClaudeTheme.stroke.cgColor
-                iconBg.layer?.backgroundColor = ClaudeTheme.secondarySoft.cgColor
-                titleLabel.textColor = ClaudeTheme.ink
-                subtitleLabel.textColor = ClaudeTheme.inkSecondary
-                iconView.contentTintColor = ClaudeTheme.secondaryAccent
+                // 中性灰罩层，浅深色模式下都成立
+                bgLayer.backgroundColor = NSColor.labelColor.withAlphaComponent(0.08).cgColor
+                titleLabel.textColor = .labelColor
+                iconView.contentTintColor = .secondaryLabelColor
             } else {
-                bgLayer.backgroundColor = ClaudeTheme.cream.withAlphaComponent(0.26).cgColor
-                strokeLayer.strokeColor = NSColor.clear.cgColor
-                iconBg.layer?.backgroundColor = ClaudeTheme.controlFill.cgColor
-                titleLabel.textColor = ClaudeTheme.ink
-                subtitleLabel.textColor = ClaudeTheme.inkTertiary
-                iconView.contentTintColor = ClaudeTheme.inkSecondary
+                bgLayer.backgroundColor = NSColor.clear.cgColor
+                titleLabel.textColor = .labelColor
+                iconView.contentTintColor = .secondaryLabelColor
             }
             CATransaction.commit()
         }
@@ -497,7 +469,7 @@ final class VersionLinkButton: NSView {
         wantsLayer = true
 
         label.stringValue = text
-        label.font = NSFont.systemFont(ofSize: 10)
+        label.font = NSFont.systemFont(ofSize: 11)
         label.backgroundColor = .clear
         label.alignment = .center
         label.translatesAutoresizingMaskIntoConstraints = false
@@ -521,11 +493,8 @@ final class VersionLinkButton: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let a = trackingArea { removeTrackingArea(a) }
-        let a = NSTrackingArea(rect: bounds,
-                               options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .cursorUpdate],
-                               owner: self, userInfo: nil)
-        addTrackingArea(a); trackingArea = a
+        rebuildHoverTrackingArea(existing: &trackingArea,
+                                 options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .cursorUpdate])
     }
 
     override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
@@ -540,19 +509,18 @@ final class VersionLinkButton: NSView {
 
     private func refresh() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            label.textColor = isHovered ? ClaudeTheme.ink : ClaudeTheme.inkTertiary
+            label.textColor = isHovered ? .labelColor : .tertiaryLabelColor
         }
     }
 }
 
-/// 升级胶囊按钮：accent 色背景 + 向上箭头 + "升级" 文字。
+/// 升级胶囊按钮：系统强调色平铺 + 向上箭头 + "升级" 文字。
 /// 仅在有新版本时由外部 setLatestVersion + 取消 isHidden 显示。
 final class UpgradePillButton: NSView {
 
     var onClick: (() -> Void)?
 
-    private let bgLayer = CAGradientLayer()
-    private let strokeLayer = CAShapeLayer()
+    private let bgLayer = CALayer()
     private let iconView = NSImageView()
     private let label = NSTextField(labelWithString: "升级")
     private var trackingArea: NSTrackingArea?
@@ -565,13 +533,7 @@ final class UpgradePillButton: NSView {
 
         bgLayer.cornerRadius = 9
         bgLayer.cornerCurve = .continuous
-        bgLayer.startPoint = CGPoint(x: 0.05, y: 0.95)
-        bgLayer.endPoint = CGPoint(x: 0.95, y: 0.05)
         layer?.addSublayer(bgLayer)
-
-        strokeLayer.fillColor = .clear
-        strokeLayer.lineWidth = 1
-        layer?.addSublayer(strokeLayer)
 
         let cfg = NSImage.SymbolConfiguration(pointSize: 9, weight: .bold)
         iconView.image = NSImage(systemSymbolName: "arrow.up.circle.fill",
@@ -607,8 +569,7 @@ final class UpgradePillButton: NSView {
     required init?(coder: NSCoder) { fatalError() }
 
     func setLatestVersion(_ v: String) {
-        // 旧实现只更新 tooltip，按钮文本永远是"升级"——必须 hover 才看得到版本号。
-        // 改为把版本号一并显示，与菜单栏"新版本 v… 可用"的文案对齐。
+        // 把版本号一并显示，与菜单栏"新版本 v… 可用"的文案对齐。
         label.stringValue = "升级 v\(v)"
         label.sizeToFit()
         invalidateIntrinsicContentSize()
@@ -627,19 +588,13 @@ final class UpgradePillButton: NSView {
         CATransaction.begin()
         CATransaction.setDisableActions(true)
         bgLayer.frame = bounds
-        strokeLayer.frame = bounds
-        let r = bounds.insetBy(dx: 0.5, dy: 0.5)
-        strokeLayer.path = CGPath(roundedRect: r, cornerWidth: r.height / 2, cornerHeight: r.height / 2, transform: nil)
         CATransaction.commit()
     }
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let a = trackingArea { removeTrackingArea(a) }
-        let a = NSTrackingArea(rect: bounds,
-                               options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .cursorUpdate],
-                               owner: self, userInfo: nil)
-        addTrackingArea(a); trackingArea = a
+        rebuildHoverTrackingArea(existing: &trackingArea,
+                                 options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect, .cursorUpdate])
     }
 
     override func cursorUpdate(with event: NSEvent) { NSCursor.pointingHand.set() }
@@ -654,12 +609,9 @@ final class UpgradePillButton: NSView {
 
     private func refresh() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            let primary = isHovered ? ClaudeTheme.accentPressed : ClaudeTheme.accent
-            bgLayer.colors = [
-                primary.cgColor,
-                ClaudeTheme.secondaryAccent.withAlphaComponent(isHovered ? 0.88 : 0.72).cgColor,
-            ]
-            strokeLayer.strokeColor = NSColor.white.withAlphaComponent(isHovered ? 0.46 : 0.32).cgColor
+            // 扁平单色，hover 时轻微收紧透明度
+            bgLayer.backgroundColor = NSColor.controlAccentColor
+                .withAlphaComponent(isHovered ? 0.85 : 1.0).cgColor
         }
     }
 }

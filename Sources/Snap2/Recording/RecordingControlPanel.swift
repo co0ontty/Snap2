@@ -23,7 +23,7 @@ final class RecordingControlPanel {
 
     init() {
         let size = NSSize(width: 156, height: 44)
-        panel = GlassPanel(size: size, cornerRadius: 14, level: .statusBar + 1)
+        panel = GlassPanel(size: size, cornerRadius: Glass.radiusCard, level: .statusBar + 1)
 
         let host = panel.contentBox
 
@@ -69,25 +69,8 @@ final class RecordingControlPanel {
     /// 显示在屏幕右上角（与系统通知一致的角落），并开始计时
     func showAndStart(on screen: NSScreen? = nil) {
         let s = screen ?? NSScreen.main ?? NSScreen.screens.first
-        guard let visible = s?.visibleFrame else { return }
-        let margin: CGFloat = 16
-        let origin = NSPoint(
-            x: visible.maxX - panel.frame.width - margin,
-            y: visible.maxY - panel.frame.height - margin
-        )
-        panel.alphaValue = 0
-        panel.setFrameOrigin(origin)
-        panel.orderFront(nil)
-
-        // 入场：从上方滑入（与 CopyToast 一致）
-        let from = NSPoint(x: origin.x, y: origin.y + 12)
-        panel.setFrameOrigin(from)
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.22
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = 1.0
-            panel.animator().setFrameOrigin(origin)
-        }, completionHandler: nil)
+        let origin = PanelFX.topRightOrigin(panelSize: panel.frame.size, in: s, margin: 16)
+        PanelFX.animateIn(panel: panel, to: origin, rise: 12, duration: 0.22, slide: .down)
 
         // 启动 1Hz 计时器；用 CommonRunLoop 模式，菜单弹出 / drag tracking 期间也走
         startedAt = Date()

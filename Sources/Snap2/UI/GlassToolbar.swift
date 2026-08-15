@@ -31,8 +31,8 @@ final class GlassToolbar: NSView {
         didSet { syncWidthHighlight() }
     }
 
-    static let toolbarHeight: CGFloat = 46
-    static let toolbarPadding: CGFloat = 10
+    static let toolbarHeight: CGFloat = 40
+    static let toolbarPadding: CGFloat = 8
 
     /// 操作组按钮数（撤销/保存/复制/钉/录制）；不含独立的关闭按钮。
     /// intrinsicWidth 与 buildLayout 都用同一个常量，避免硬编码漂移。
@@ -52,15 +52,7 @@ final class GlassToolbar: NSView {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let a = hoverArea { removeTrackingArea(a) }
-        let area = NSTrackingArea(
-            rect: bounds,
-            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
-            owner: self,
-            userInfo: nil
-        )
-        addTrackingArea(area)
-        hoverArea = area
+        rebuildHoverTrackingArea(existing: &hoverArea)
     }
 
     override func mouseEntered(with event: NSEvent) {
@@ -123,7 +115,7 @@ final class GlassToolbar: NSView {
             toolButtons[tool] = btn
             stack.addArrangedSubview(btn)
         }
-        stack.addArrangedSubview(Glass.separator(height: 22))
+        stack.addArrangedSubview(Glass.separator(height: 18))
 
         // 2. 颜色组
         for color in AnnotationPalette.colors {
@@ -133,7 +125,7 @@ final class GlassToolbar: NSView {
             colorButtons.append(sw)
             stack.addArrangedSubview(sw)
         }
-        stack.addArrangedSubview(Glass.separator(height: 22))
+        stack.addArrangedSubview(Glass.separator(height: 18))
 
         // 3. 线宽组
         for level in LineWidthLevel.allCases {
@@ -143,7 +135,7 @@ final class GlassToolbar: NSView {
             widthButtons[level] = dot
             stack.addArrangedSubview(dot)
         }
-        stack.addArrangedSubview(Glass.separator(height: 22))
+        stack.addArrangedSubview(Glass.separator(height: 18))
 
         // 4. 操作组
         let actions: [(String, String, Selector)] = [
@@ -281,9 +273,7 @@ final class WidthDot: NSButton {
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
-        if let a = trackingArea { removeTrackingArea(a) }
-        let a = NSTrackingArea(rect: bounds, options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect], owner: self, userInfo: nil)
-        addTrackingArea(a); trackingArea = a
+        rebuildHoverTrackingArea(existing: &trackingArea)
     }
     override func mouseEntered(with event: NSEvent) { isHovered = true; refresh() }
     override func mouseExited(with event: NSEvent)  { isHovered = false; refresh() }
@@ -312,7 +302,7 @@ final class WidthDot: NSButton {
         effectiveAppearance.performAsCurrentDrawingAppearance {
             CATransaction.begin()
             CATransaction.setAnimationDuration(Glass.animDuration)
-            bgLayer.backgroundColor = isSelected ? ClaudeTheme.accent.withAlphaComponent(0.22).cgColor
+            bgLayer.backgroundColor = isSelected ? NSColor.controlAccentColor.withAlphaComponent(0.28).cgColor
                 : (isHovered ? Glass.hoverFill.cgColor : NSColor.clear.cgColor)
             dotLayer.backgroundColor = NSColor.white.withAlphaComponent(isSelected ? 1.0 : 0.85).cgColor
             CATransaction.commit()

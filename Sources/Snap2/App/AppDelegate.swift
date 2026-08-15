@@ -29,6 +29,23 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             SettingsWindowController.shared.showWindow()
         }
 
+        // 界面验证入口：`Snap2 --demo-capture` / `Snap2 --demo-recording`
+        // 启动后走与全局热键完全相同的通知路径，便于截图检查 HUD。
+        // `--demo-annotating` 更进一步：生成一张测试图直接进入标注模式，
+        // 不依赖鼠标事件模拟就能看到工具栏。
+        let args = ProcessInfo.processInfo.arguments
+        var demoNames: [Notification.Name] = []
+        if args.contains("--demo-capture") { demoNames.append(.captureRequested) }
+        if args.contains("--demo-recording") { demoNames.append(.recordingRequested) }
+        for name in demoNames {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                NotificationCenter.default.post(name: name, object: nil)
+            }
+        }
+        if args.contains("--demo-annotating") {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.8) { self.presentDemoAnnotationHUD() }
+        }
+
         // 启动 3s 后台后台检查更新（24h 防抖在 UpdateChecker 内部处理）
         DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) {
             UpdateChecker.shared.checkOnLaunchIfNeeded()
@@ -52,6 +69,32 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     // MARK: - 欢迎引导
+
+    /// 界面验证用：画一张带内容的测试图，钉到屏幕后直接进入标注模式，
+    /// 让标注工具栏 HUD 立即可见（--demo-annotating）。
+    @MainActor
+    private func presentDemoAnnotationHUD() {
+        let size = NSSize(width: 900, height: 560)
+        let img = NSImage(size: size)
+        img.lockFocus()
+        for (i, color) in [NSColor.systemBlue, .systemGreen, .systemOrange, .systemPurple].enumerated() {
+            color.withAlphaComponent(0.55).setFill()
+            NSRect(x: CGFloat(i) * 225, y: 0, width: 225, height: size.height).fill()
+        }
+        NSString(string: "Snap² 标注工具栏预览")
+            .draw(in: NSRect(x: 60, y: size.height / 2 - 24, width: 780, height: 48),
+                  withAttributes: [
+                    .font: NSFont.systemFont(ofSize: 34, weight: .semibold),
+                    .foregroundColor: NSColor.black.withAlphaComponent(0.75),
+                  ])
+        img.unlockFocus()
+
+        let screenFrame = NSScreen.main?.visibleFrame ?? NSRect(x: 100, y: 100, width: 1200, height: 800)
+        let origin = CGPoint(x: screenFrame.midX - size.width / 2,
+                             y: screenFrame.midY - size.height / 2)
+        let pin = PinnedImageWindow.show(image: img, at: origin)
+        CaptureManager.shared.editPin(pin)
+    }
 
     private func showWelcomeWindow() {
         let controller = WelcomeWindowController { [weak self] in

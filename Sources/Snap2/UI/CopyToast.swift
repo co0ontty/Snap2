@@ -45,7 +45,7 @@ final class CopyToast {
         let thumbBoxW: CGFloat = 56
         let thumbBoxH: CGFloat = 40
         let size = NSSize(width: 280, height: 68)
-        let panel = GlassPanel(size: size, cornerRadius: 18, level: .floating)
+        let panel = GlassPanel(size: size, cornerRadius: Glass.radiusCard, level: .floating)
 
         let host = panel.contentBox
 
@@ -86,28 +86,10 @@ final class CopyToast {
         sub.frame = NSRect(x: textLeft, y: 14, width: textWidth, height: 16)
         host.addSubview(sub)
 
-        // 屏幕右上角（与 macOS 系统通知方向一致）
-        let visibleFrame = screen.visibleFrame
-        let margin: CGFloat = 24
-        let origin = NSPoint(
-            x: visibleFrame.maxX - size.width - margin,
-            y: visibleFrame.maxY - size.height - margin
-        )
-        panel.setFrameOrigin(origin)
-        panel.alphaValue = 0
-        panel.orderFront(nil)
+        // 屏幕右上角（与 macOS 系统通知方向一致），从上方滑入 + 渐显
+        let origin = PanelFX.topRightOrigin(panelSize: size, in: screen, margin: 24)
+        PanelFX.animateIn(panel: panel, to: origin, rise: 24, duration: 0.28, slide: .down)
         current = panel
-
-        // 入场：从上方滑入 + 渐显
-        let from = NSPoint(x: origin.x, y: origin.y + 24)
-        panel.setFrameOrigin(from)
-
-        NSAnimationContext.runAnimationGroup({ ctx in
-            ctx.duration = 0.28
-            ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-            panel.animator().alphaValue = 1.0
-            panel.animator().setFrameOrigin(origin)
-        }, completionHandler: nil)
 
         // 1.4s 后自动消失
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.4) {

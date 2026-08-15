@@ -221,7 +221,7 @@ private final class OverlayContentView: NSView {
     private func build(hostApp: PermissionHostApp, panel: PermissionPanel) {
         // 左侧 ← 返回按钮 ——————————————————————————
         let backChrome = AppearanceAwareView { v in
-            v.layer?.backgroundColor = ClaudeTheme.secondaryAccent.withAlphaComponent(0.16).cgColor
+            v.layer?.backgroundColor = NSColor.controlAccentColor.withAlphaComponent(0.16).cgColor
             v.layer?.borderColor = NSColor.white.withAlphaComponent(0.16).cgColor
         }
         backChrome.translatesAutoresizingMaskIntoConstraints = false
@@ -247,7 +247,7 @@ private final class OverlayContentView: NSView {
         arrowView.translatesAutoresizingMaskIntoConstraints = false
         arrowView.image = NSImage(systemSymbolName: "arrow.up", accessibilityDescription: nil)
         arrowView.symbolConfiguration = .init(pointSize: 26, weight: .bold)
-        arrowView.contentTintColor = ClaudeTheme.secondaryAccent
+        arrowView.contentTintColor = .controlAccentColor
 
         addSubview(arrowView)
 

@@ -130,9 +130,9 @@ final class PermissionDragSourceView: NSView, NSPasteboardItemDataProvider, NSDr
 
     private func refreshAppearance() {
         effectiveAppearance.performAsCurrentDrawingAppearance {
-            rowView.layer?.backgroundColor = ClaudeTheme.controlFill.cgColor
-            rowView.layer?.borderColor = ClaudeTheme.stroke.cgColor
-            label.textColor = ClaudeTheme.ink
+            rowView.layer?.backgroundColor = NSColor.controlBackgroundColor.cgColor
+            rowView.layer?.borderColor = NSColor.separatorColor.cgColor
+            label.textColor = .labelColor
         }
     }
 
